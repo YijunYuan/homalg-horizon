@@ -18,7 +18,7 @@ import mimetypes
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from archon_horizon.log import log
 
@@ -218,7 +218,13 @@ def _make_handler(service: WorkspaceService, dist_dir: Path | None) -> type[Base
         def do_GET(self) -> None:  # noqa: N802
             route = urlparse(self.path).path
             try:
-                if route == "/api/state":
+                if route == "/api/reference-page.png":
+                    query = parse_qs(urlparse(self.path).query)
+                    path = service.reference_path((query.get("slug") or [""])[0], (query.get("page") or [""])[0], image=True)
+                    self._send(200, path.read_bytes(), "image/png", cache_control="private, no-store")
+                elif route == "/api/reference-page":
+                    self._send(200, json.dumps(service.serve_endpoint(self.path)).encode("utf-8"), "application/json", cache_control="private, no-store")
+                elif route == "/api/state":
                     # Short-circuit BEFORE the (expensive) state computation: the
                     # stamp is a cheap stat-walk over everything state() reads, so
                     # an unchanged 5s poll costs ~1ms instead of a full recompute.

@@ -12,6 +12,9 @@ import DagPage from './DagPage';
 import LeanPage from './LeanPage';
 import BenchmarkPage from './BenchmarkPage';
 import BoardPage from './BoardPage';
+import DocFilter from './DocFilter';
+import ReferencePage from './ReferencePage';
+import {filterWorkspace} from './homalg';
 import { RefLinkProvider, useRefResolver, useRefLinks, refChipClickHandler, inboxOwnerTask, inboxReadBy, RefChip } from './refs';
 import {
   dayKey,
@@ -29,7 +32,7 @@ const STATIC = isStaticDashboard();
 const ARCHON_ACCEPT = 'agent-ready';
 const ARCHON_PENDING = 'not-ready';
 const ARCHON_REJECTED = 'rejected';
-const INBOX_KIND_OPTIONS = ['conversation', 'hint', 'issue', 'protection', 'info', 'memory'];
+const INBOX_KIND_OPTIONS = ['conversation', 'hint', 'issue', 'dispute', 'document-error', 'protection', 'info', 'memory'];
 const INBOX_PROVIDER_OPTIONS = ['local', 'github'];
 const INBOX_STATUS_OPTIONS = ['open', 'closed', 'archived'];
 // Resolved and archived items remain available, but triage starts with live work.
@@ -148,7 +151,11 @@ export function App() {
 
 // Split out so the ref-link resolver (and its react-router `navigate`) can live
 // inside a component that always has a non-null state.
-function AppShell({ state, reload, isError }: { state: HorizonState; reload: () => void; isError: boolean }) {
+function AppShell({ state: allState, reload, isError }: { state: HorizonState; reload: () => void; isError: boolean }) {
+  const [params] = useSearchParams();
+  const doc = params.get('doc') || '';
+  const state = useMemo(() => filterWorkspace(allState, doc), [allState,doc]);
+  const suffix = doc ? `?doc=${encodeURIComponent(doc)}` : '';
   const resolve = useRefResolver(state);
   return (
     <RefLinkProvider resolve={resolve}>
@@ -159,23 +166,25 @@ function AppShell({ state, reload, isError }: { state: HorizonState; reload: () 
         <span className="version-badge" title={`Horizon dashboard v${APP_VERSION}`}>v{APP_VERSION}</span>
         <span className="project-badge" title={state.workspace_root || state.workspace}>{state.workspace}</span>
         {STATIC && <span className="project-badge" title={window.__ARCHON_STATIC__?.generatedAt}>static</span>}
+        <DocFilter state={allState} />
         <nav className="header-nav" aria-label="Dashboard">
-          <NavLink to="/" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} end>Overview</NavLink>
-          <NavLink to="/inbox" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Inbox</NavLink>
-          <NavLink to="/roadmap" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Roadmap</NavLink>
-          <NavLink to="/tasks" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Tasks</NavLink>
-          <NavLink to="/board" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Board</NavLink>
-          <NavLink to="/search" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Search</NavLink>
-          <NavLink to="/blueprint" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Blueprint</NavLink>
-          <NavLink to="/dag" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>DAG</NavLink>
-          <NavLink to="/logs" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Logs</NavLink>
-          <NavLink to="/lean" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Lean</NavLink>
-          <NavLink to="/benchmark" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Benchmark</NavLink>
+          <NavLink to={"/" + suffix} className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`} end>Overview</NavLink>
+          <NavLink to={"/inbox" + suffix} className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Inbox</NavLink>
+          <NavLink to={"/roadmap" + suffix} className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Roadmap</NavLink>
+          <NavLink to={"/tasks" + suffix} className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Tasks</NavLink>
+          <NavLink to={"/board" + suffix} className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Board</NavLink>
+          <NavLink to={"/search" + suffix} className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Search</NavLink>
+          <NavLink to={"/blueprint" + suffix} className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Blueprint</NavLink>
+          <NavLink to={"/dag" + suffix} className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>DAG</NavLink>
+          <NavLink to={"/logs" + suffix} className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Logs</NavLink>
+          <NavLink to={"/lean" + suffix} className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Lean</NavLink>
+          <NavLink to={"/benchmark" + suffix} className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Benchmark</NavLink>
         </nav>
       </header>
       <main className="main-content">
         <ErrorBoundary>
         <Routes>
+          <Route path="/reference" element={<ReferencePage />} />
           <Route path="/" element={<Overview state={state} reload={reload} />} />
           <Route path="/inbox" element={<InboxPage state={state} reload={reload} />} />
           <Route path="/roadmap" element={<RoadmapPage state={state} reload={reload} />} />

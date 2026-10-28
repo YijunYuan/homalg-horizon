@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import DagNetwork from './components/DagNetwork';
 import { NON_FORMALIZATION_KINDS } from './dagGraph';
+import {currentDag,filterDag,overlayOf} from './homalg';
+import {HomalgBadges,SourceLinks} from './HomalgNode';
 import { bibMapFrom, buildBlueprintModel, TexFragment } from './components/BlueprintDoc';
 import ProjectPicker from './components/ProjectPicker';
 import { syncBlueprintDags, getBlueprintChapters, getBlueprintDag, type BlueprintChaptersResponse, type BlueprintDagResponse } from './api';
@@ -17,7 +19,7 @@ const QUERY_LABEL: Record<Query, string> = {
 
 const proved = (n: any) => n.proved ?? n.leanok ?? false;
 const mathlib = (n: any) => n.mathlib_ok ?? n.mathlibok ?? false;
-const isDone = (n: any) => proved(n) || mathlib(n);
+const isDone = (n: any) => overlayOf(n) ? overlayOf(n).headline === 'proof-complete' : proved(n) || mathlib(n);
 const leanName = (n: any) => n.lean_name ?? n.lean ?? null;
 const nodeType = (n: any) => n.type ?? n.kind ?? 'node';
 const fileOf = (n: any) => n.lean_file ?? n.tex_file ?? '';
@@ -61,6 +63,8 @@ export default function DagPage({ state, reload }: { state: any; reload?: () => 
   const [searchParams] = useSearchParams();
   const requestedProject = searchParams.get('project') ?? '';
   const focusNode = searchParams.get('focus') ?? '';
+  const docFilter = searchParams.get('doc') || '';
+  const docSuffix = docFilter ? `&doc=${encodeURIComponent(docFilter)}` : '';
   const projects: string[] = Object.keys(state.blueprints ?? {});
   const [project, setProject] = useState(projects[0] ?? '');
   // Fetch the project's blueprint chapters so node statements/proofs render
@@ -115,10 +119,10 @@ export default function DagPage({ state, reload }: { state: any; reload?: () => 
   // Prefer the freshly-fetched full DAG; fall back to the light DAG from the
   // poll (nodes/edges without the heavy text) so the graph still draws instantly
   // while the full payload is loading.
-  const dag: any = (project ? (fullDag ?? state.blueprints?.[project]) : null) ?? {};
+  const dag: any = useMemo(() => filterDag(currentDag(fullDag,state.blueprints?.[project]),docFilter),[fullDag,state.blueprints,project,docFilter]);
   const dagSig = useMemo(() => JSON.stringify(dag?.nodes ?? []) + '|' + JSON.stringify(dag?.edges ?? []), [dag]);
   const nodes: any[] = useMemo(() => (dag.nodes ?? []).filter((n: any) => (
-    !NON_FORMALIZATION_KINDS.has(String(nodeType(n)).toLowerCase())
+    overlayOf(n) || !NON_FORMALIZATION_KINDS.has(String(nodeType(n)).toLowerCase())
   )), [dagSig]); // eslint-disable-line react-hooks/exhaustive-deps
   const edges: any[] = useMemo(() => dag.edges ?? [], [dagSig]); // eslint-disable-line react-hooks/exhaustive-deps
   const meta = dag.meta ?? {};
@@ -227,14 +231,14 @@ export default function DagPage({ state, reload }: { state: any; reload?: () => 
   );
 
   const statusBadge = node && (
-    proved(node) ? <span className="badge badge-proved">✓ leanok</span>
+    overlayOf(node) ? <HomalgBadges node={node}/> : proved(node) ? <span className="badge badge-proved">✓ leanok</span>
       : mathlib(node) ? <span className="badge badge-mathlib">ⓜ mathlib</span>
       : node.has_sorry ? <span className="badge badge-sorry">sorry</span>
       : <span className="badge badge-unproved">unproved</span>
   );
 
   const openBlueprint = (n: any) => {
-    navigate(`/blueprint?project=${encodeURIComponent(project)}&focus=${encodeURIComponent(n.id)}`);
+    navigate(`/blueprint?project=${encodeURIComponent(project)}&focus=${encodeURIComponent(n.id)}${docSuffix}`);
   };
   const openLean = (n: any) => {
     const file = n.lean_file;
@@ -351,6 +355,8 @@ export default function DagPage({ state, reload }: { state: any; reload?: () => 
                     <div className="node-badges"><span className="badge badge-type">{String(nodeType(node)).toUpperCase()}</span>{statusBadge}</div>
                     <div className="node-title">{node.title || node.id}</div>
                     <div className="node-id">{node.id}</div>
+                    <SourceLinks sources={node.sources}/>
+                    {overlayOf(node)?.blocked_by?.length > 0 && <div>Blocked by: {overlayOf(node).blocked_by.join(", ")}</div>}
                     {node.chapter && <div className="node-chapter">§ {node.chapter}</div>}
                     {leanName(node) && <div className="lean-ref">Lean: <code>{leanName(node)}</code></div>}
                     <div className="node-actions">

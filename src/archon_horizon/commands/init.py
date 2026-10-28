@@ -701,52 +701,58 @@ class InitCommand:
                     )
                 )
 
+        # HomAlg workspaces own their repository and ignore policy.
+        from archon_horizon.config.loader import load_config
+        manage_gitignore = load_config(self.root).manage_gitignore
+        if not manage_gitignore and not (self.root / ".git").exists():
+            raise ValueError("workspace.manage_gitignore: false requires an existing user .git repository")
         # Initialize Git if needed
         import subprocess
         if not (self.root / ".git").exists():
             subprocess.run(["git", "init", "-b", "main"], cwd=self.root, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             log.success("Initialized empty Git repository on branch 'main'.")
             
-        # Update .gitignore. The state directory is the workspace ledger, so
-        # keep it trackable while excluding volatile project git dirs and locks.
-        gitignore = self.root / ".gitignore"
-        lines: list[str] = []
-        if gitignore.exists():
-            lines = gitignore.read_text("utf-8").splitlines()
-        migrated = False
-        kept: list[str] = []
-        for line in lines:
-            if line.strip() in {".archon-horizon", ".archon-horizon/"}:
-                migrated = True
-                continue
-            kept.append(line)
-        ignores = set(kept)
+        if manage_gitignore:
+            # Update .gitignore. The state directory is the workspace ledger, so
+            # keep it trackable while excluding volatile project git dirs and locks.
+            gitignore = self.root / ".gitignore"
+            lines: list[str] = []
+            if gitignore.exists():
+                lines = gitignore.read_text("utf-8").splitlines()
+            migrated = False
+            kept: list[str] = []
+            for line in lines:
+                if line.strip() in {".archon-horizon", ".archon-horizon/"}:
+                    migrated = True
+                    continue
+                kept.append(line)
+            ignores = set(kept)
         
-        added_ignores = False
-        # `.claude/agents` and `.codex/agents` are compiled from the tracked
-        # subagent descriptors at run start — derived, so don't commit them.
-        for entry in (
-            ".env",
-            ".archon-horizon/vcs/",
-            ".archon-horizon/locks/",
-            ".archon-horizon/cache/",
-            ".archon-horizon/tmp/",
-            ".archon-horizon/tmp-*",
-            ".archon-horizon/recovery-*",
-            ".archon-horizon/search/",
-            ".claude/agents/",
-            ".codex/agents/",
-            "_site/",
-            "*.lock",
-            "*.tmp",
-        ):
-            if entry not in ignores:
-                kept.append(entry)
-                ignores.add(entry)
-                added_ignores = True
-        if migrated or added_ignores:
-            gitignore.write_text("\n".join(kept).rstrip() + "\n", "utf-8")
-            log.info("Updated .gitignore for env files and volatile Horizon state.")
+            added_ignores = False
+            # `.claude/agents` and `.codex/agents` are compiled from the tracked
+            # subagent descriptors at run start — derived, so don't commit them.
+            for entry in (
+                ".env",
+                ".archon-horizon/vcs/",
+                ".archon-horizon/locks/",
+                ".archon-horizon/cache/",
+                ".archon-horizon/tmp/",
+                ".archon-horizon/tmp-*",
+                ".archon-horizon/recovery-*",
+                ".archon-horizon/search/",
+                ".claude/agents/",
+                ".codex/agents/",
+                "_site/",
+                "*.lock",
+                "*.tmp",
+            ):
+                if entry not in ignores:
+                    kept.append(entry)
+                    ignores.add(entry)
+                    added_ignores = True
+            if migrated or added_ignores:
+                gitignore.write_text("\n".join(kept).rstrip() + "\n", "utf-8")
+                log.info("Updated .gitignore for env files and volatile Horizon state.")
 
         env_path = self.root / ".env"
         env_created = write_env_template(self.root)

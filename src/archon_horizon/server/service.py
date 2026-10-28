@@ -14,6 +14,8 @@ import os
 import re
 import threading
 import time
+
+import yaml
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, urlparse
@@ -1952,19 +1954,79 @@ class WorkspaceService:
                 pass
         return eps
 
+    def overlay(self) -> dict[str, Any]:
+        """Read HomAlg status on every request; never contaminate the published DAG cache."""
+        path = self.workspace.state_path / "overlay" / "HomAlg.json"
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {"nodes": {}}
+        records = data.get("nodes", data) if isinstance(data, dict) else {}
+        allowed = {"headline", "status", "local_status", "locked", "fidelity", "fidelity_status",
+                   "reviewed", "reopened", "is_aux", "aux_kind", "aux_parent", "disputed",
+                   "needs_repair", "approx", "blocked_by", "cited", "dispute_raised",
+                   "dispute_confirmed", "deps_mismatch"}
+        return {"nodes": {key: {field: value for field, value in record.items() if field in allowed}
+                          for key, record in records.items() if isinstance(record, dict)}} if isinstance(records, dict) else {"nodes": {}}
+
+    def _with_overlay(self, dag: dict[str, Any], overlay: dict[str, Any] | None = None) -> dict[str, Any]:
+        records = (overlay or self.overlay())["nodes"]
+        return {**dag, "nodes": [
+            {**node, **records[node["id"]], "homalg": records[node["id"]]}
+            if node.get("id") in records else dict(node)
+            for node in dag.get("nodes", [])
+        ]} if dag else {}
+
+    def reference_path(self, slug: str, page: str, *, image: bool = False) -> Path:
+        """Allow the private-library root symlink, but reject every child escape."""
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", slug) or not re.fullmatch(r"[0-9]{4}", page) or page == "0000":
+            raise KeyError("reference page")
+        root = (self.root / "references").resolve()
+        target = (root / slug / ("pages" if image else "tex") / f"page-{page}.{'png' if image else 'tex'}").resolve()
+        if not target.is_relative_to(root) or not target.is_file():
+            raise KeyError("reference page")
+        return target
+
+    def reference_page(self, slug: str, page: str) -> dict[str, Any]:
+        path = self.reference_path(slug, page)
+        root = (self.root / "references").resolve()
+        status_path = (root / slug / "transcription.yaml").resolve()
+        if not status_path.is_relative_to(root):
+            raise KeyError("reference status")
+        status: dict[str, Any] = {"status": "todo"}
+        if status_path.is_file():
+            document = yaml.safe_load(status_path.read_text(encoding="utf-8")) or {}
+            if isinstance(document, dict) and isinstance(document.get("pages"), dict):
+                record = document["pages"].get(page, {})
+                if isinstance(record, dict):
+                    status = record
+        text = path.read_text(encoding="utf-8")
+        # A changed reviewed page must not keep an authoritative reviewed badge.
+        import hashlib
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        stale = status.get("status") == "reviewed" and status.get("file_sha256") != digest
+        return {"slug": slug, "page": page, "text": text,
+                "status": {**status, **({"status": "transcribed"} if stale else {})},
+                "stale": stale, "sha256": digest}
+
     def serve_endpoint(self, path: str) -> Any:
         """Resolve one GET path (with query) to its JSON payload."""
         parsed = urlparse(path)
         query = parse_qs(parsed.query)
         if parsed.path == "/api/state":
             return self.state()
+        if parsed.path == "/api/overlay":
+            return self.overlay()
+        if parsed.path == "/api/reference-page":
+            return self.reference_page((query.get("slug") or [""])[0], (query.get("page") or [""])[0])
         if parsed.path == "/api/performance":
             return dict(self._last_state_performance)
         if parsed.path == "/api/blueprints":
             # Light per-project DAGs, split out of /api/state: they change only
             # on publish/sync, so the browser's ETag cache keeps this a 304
             # while the 5s state poll stays several MB smaller.
-            return self._light_dags_cached()
+            overlay = self.overlay()
+            return {project: self._with_overlay(dag, overlay) for project, dag in self._light_dags_cached().items()}
         if parsed.path == "/api/transcripts":
             return self.transcripts()
         if parsed.path == "/api/transcript":
@@ -2086,7 +2148,7 @@ class WorkspaceService:
             # Full (heavy) single-project DAG, fetched on demand by the Blueprint
             # and DAG pages. Kept out of /api/state so the poll stays small.
             proj = (query.get("project") or [""])[0]
-            return published_dag(self.workspace, proj) or {}
+            return self._with_overlay(published_dag(self.workspace, proj) or {})
         if parsed.path == "/api/source":
             proj = (query.get("project") or [""])[0]
             if proj:

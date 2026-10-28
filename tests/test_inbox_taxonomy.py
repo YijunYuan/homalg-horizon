@@ -24,7 +24,7 @@ projects:
 
 def test_kind_and_status_sets() -> None:
     assert {k.value for k in InboxKind} == {
-        "conversation", "hint", "issue", "protection", "info", "memory",
+        "conversation", "hint", "issue", "protection", "info", "memory", "dispute", "document-error",
     }
     assert {s.value for s in InboxStatus} == {"open", "closed", "archived"}
 

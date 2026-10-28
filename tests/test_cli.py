@@ -41,8 +41,8 @@ def test_full_cli_flow(tmp_path: Path) -> None:
     assert _run(ws, "inbox", "list") == 0
     assert _run(ws, "inbox", "complete", "I-0001") == 0
 
-    assert _run(ws, "dashboard", "--static") == 0
-    assert (ws / "dashboard" / "index.html").exists()
+    assert _run(ws, "dashboard", "--static", "--out", "_site") == 0
+    assert (ws / "_site" / "index.html").exists()
 
     assert _run(ws, "sync") == 0
 

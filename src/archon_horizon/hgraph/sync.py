@@ -639,6 +639,14 @@ def parse_lean(text: str) -> list[dict]:
             ns.pop()
             continue
         m = _DECL_RE.match(line)
+        if m is None and re.fullmatch(
+            r"\s*(?:@\[[^\]]*\]\s*)?(?:private\s+|protected\s+|noncomputable\s+)*"
+            r"(?:theorem|lemma|def|abbrev|instance|structure|class|inductive)\s*", line
+        ):
+            # Lean permits a newline between the declaration keyword and name.
+            # Keep the original line index/body; comments have already been masked.
+            following = next((part.strip() for part in code_lines[i + 1:] if part.strip()), "")
+            m = _DECL_RE.match(line.rstrip() + " " + following)
         if m:
             kind, name = m.group(1), m.group(2)
             is_private = bool(re.search(r"\bprivate\s+", line[:m.start(1)]))

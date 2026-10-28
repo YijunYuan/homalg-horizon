@@ -218,6 +218,7 @@ def list_items(
     kind: list[InboxKind] = typer.Option((), "--kind", help="Only show this kind. Repeat for several kinds."),
     label: list[str] = typer.Option((), "--label", help="Require this label. Repeat to require several labels."),
     project: str | None = typer.Option(None, "--project", help="Only show items scoped to this project."),
+    node: list[str] = typer.Option((), "--node", help="Require related node labels; repeat for several nodes."),
     to: str | None = typer.Option(None, "--to", help="Only show items addressed to this audience; use '' for general items."),
     task: str | None = typer.Option(None, "--task", help="A task's inbox: items owned by this task PLUS shared (unowned) items."),
     mine: bool = typer.Option(False, "--mine", help="Shortcut for --task <my task>, from the session environment."),
@@ -271,7 +272,8 @@ def list_items(
     ]
     warnings = inbox_health_warnings(visible_items)
     items = sorted(
-        (item for item in visible_items if matches_filter(item, filters)),
+        (item for item in visible_items if matches_filter(item, filters)
+         and set(node).issubset(item.scope.targets("blueprint_nodes"))),
         key=lambda item: (inbox_attention_rank(item), item.updated_at),
         reverse=True,
     )
@@ -318,6 +320,7 @@ def add(
     body: str = typer.Option(..., "--body", help="Inbox item body."),
     kind: InboxKind = typer.Option(InboxKind.HINT, "--kind", help="Item kind."),
     project: str | None = typer.Option(None, "--project", help="Scope the item to a project (what it is ABOUT)."),
+    node: list[str] = typer.Option([], "--node", help="Related blueprint node label; repeat for multiple nodes."),
     to: str | None = typer.Option(
         None, "--to",
         help="Recipient the item is FOR: horizon | human | project:<name> | task:<id> | run:<id>. "
@@ -355,7 +358,7 @@ def add(
     elif temporary:
         body = f"[temporary] {body}"
     labels = (NOT_READY,) if pending else (AGENT_READY,)
-    scope = InboxScope(projects=(project,) if project else ())
+    scope = InboxScope(projects=(project,) if project else (), blueprint_nodes=tuple(node))
     author_val, agent_val = _resolve_authorship(author, agent)
     _, _, description = body.partition("\n\n")
     if not description:

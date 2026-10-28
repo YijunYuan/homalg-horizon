@@ -62,7 +62,7 @@ def _entry(n, formalizes, deps, nodes, g) -> dict:
             for l in formalizes.get(n.id, []) if l in nodes]
     dep = [{"id": t, "title": nodes[t].title, "label": nodes[t].meta.get("label"), "type": ty}
            for t, ty in deps.get(n.id, [])
-           if t in nodes and is_countable({"type": nodes[t].meta.get("content_type")})]
+           if t in nodes and is_countable(nodes[t].meta)]
     reviews, comments = g.attachments(n.id, "review"), g.attachments(n.id, "comment")
     last = reviews[-1] if reviews else None
     return {
@@ -257,7 +257,7 @@ def collect(g: Graph, *, title: str = "Blueprint") -> dict:
     entries = [_entry(n, formalizes, deps, nodes, g)
                for n in nodes.values()
                if n.meta.get("generated") == "blueprint"
-               and is_countable({"type": n.meta.get("content_type")})]
+               and is_countable(n.meta)]
     # document order first (sync stamps `order` on every blueprint node);
     # alphabetical is only the fallback for hand-added nodes without one
     entries.sort(key=lambda e: (e.get("chapter") or "",
@@ -415,7 +415,7 @@ def build_document(g: Graph, blueprint: str | Path, *, title: str) -> dict:
         n.meta.get("label"): _entry(n, formalizes, deps, nodes, g)
         for n in nodes.values()
         if n.meta.get("generated") == "blueprint"
-        and is_countable({"type": n.meta.get("content_type")})
+        and is_countable(n.meta)
     }
     # Assign Horizon's group plus upstream's level stubs before snapshotting enrich.
     _assign_groups_levels(list(entries.values()))

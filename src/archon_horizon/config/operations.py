@@ -134,7 +134,7 @@ def add_project(
             # so its files (not a submodule gitlink) are tracked, then record the
             # new project in the single workspace ledger so its tree is tracked
             # from registration.
-            disabled = neutralize_nested_git(project_dir)
+            disabled = neutralize_nested_git(project_dir, workspace_root=root)
             if disabled:
                 _emit(event_log, "workspace.project.nested_git_disabled", project=name, path=disabled)
             wsgit = WorkspaceGit(root)

@@ -95,3 +95,30 @@ def test_check_serializes_and_reuses_identical_concurrent_request(
     assert calls.read_text("utf-8").splitlines() == ["call"]
     results = [json.loads(path.read_text("utf-8")) for path in (session / "checks").glob("*.json")]
     assert results and any(result["status"] in {"passed", "reused"} for result in results)
+
+
+def test_no_target_check_uses_configured_build_command_under_shared_lock(tmp_path, monkeypatch):
+    import shlex
+    import sys
+    root, project, session = _workspace(tmp_path)
+    script = project / "build.py"
+    script.write_text('''import fcntl, os, pathlib
+assert os.environ.get("HOMALG_BUILD_LOCK_HELD") == "1"
+root = pathlib.Path.cwd().parents[1]
+with (root / ".archon-horizon/cache/checks/workspace.lock").open("a+") as lock:
+    try:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        pass
+    else:
+        raise AssertionError("parent did not hold the shared build lock")
+pathlib.Path("built.txt").write_text("built")
+''')
+    config = (root / "config.yaml").read_text()
+    command = f"{shlex.quote(sys.executable)} build.py"
+    config = config.replace("ag-main: {path: projects/ag-main}", f"ag-main: {{path: projects/ag-main, build: {{command: {json.dumps(command)}}}}}")
+    (root / "config.yaml").write_text(config)
+    monkeypatch.chdir(project)
+    check(SimpleNamespace(obj={"root": root}), targets=[], lean_file=None, timeout=10, as_json=False)
+    assert (project / "built.txt").read_text() == "built"
+    assert "HOMALG_BUILD_LOCK_HELD" not in os.environ

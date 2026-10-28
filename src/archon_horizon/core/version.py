@@ -30,7 +30,9 @@ from archon_horizon import __version__
 
 VERSION_FILENAME = "version"
 _DEFAULT_STATE_DIR = Path(".archon-horizon")
-LATEST_VERSION_URL = "https://raw.githubusercontent.com/frenzymath/Archon-Horizon/refs/heads/main/src/archon_horizon/__init__.py"
+from .releases import fetch_release, release_url, release_version
+
+LATEST_VERSION_URL = release_url()
 LATEST_VERSION_CACHE_TTL_SECONDS = 24 * 60 * 60
 LATEST_VERSION_TIMEOUT_SECONDS = 0.75
 
@@ -83,14 +85,15 @@ def _release_key(version: str) -> tuple[int, ...]:
             out.append(int(part))
         else:
             break
-    return tuple(out)
+    local = re.search(r"\+homalg\.([0-9]+)$", version)
+    return (*out, int(local[1]) if local else 0)
 
 
 def _cache_dir() -> Path:
     base = os.environ.get("XDG_CACHE_HOME")
     if base:
-        return Path(base) / "archon-horizon"
-    return Path.home() / ".cache" / "archon-horizon"
+        return Path(base) / "homalg-horizon"
+    return Path.home() / ".cache" / "homalg-horizon"
 
 
 def _latest_version_cache_path() -> Path:
@@ -128,12 +131,9 @@ def _parse_package_version(source: str) -> str | None:
 
 def _fetch_latest_version() -> str | None:
     try:
-        request = Request(LATEST_VERSION_URL, headers={"User-Agent": f"archon-horizon/{__version__}"})
-        with urlopen(request, timeout=LATEST_VERSION_TIMEOUT_SECONDS) as response:
-            source = response.read(64_000).decode("utf-8", errors="replace")
+        return release_version(fetch_release(timeout=LATEST_VERSION_TIMEOUT_SECONDS)["tag_name"])
     except Exception:
         return None
-    return _parse_package_version(source)
 
 
 def latest_available_version(now: float | None = None) -> str | None:
@@ -142,6 +142,8 @@ def latest_available_version(now: float | None = None) -> str | None:
     This is deliberately best-effort: stale/missing cache, network failures,
     malformed upstream content, and unwritable cache dirs all degrade silently.
     """
+    if os.environ.get("ARCHON_HORIZON_NO_VERSION_CHECK"):
+        return None
     clock = time.time() if now is None else now
     cache_fresh, cached = _read_latest_version_cache(clock)
     if cache_fresh:

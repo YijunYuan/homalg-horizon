@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import subprocess
 import threading
 import uuid
 from collections.abc import Sequence
@@ -494,7 +495,63 @@ class Orchestrator:
     def _write_session_meta(self, session: SessionLog | None, meta: dict[str, object]) -> None:
         if session is None:
             return
-        session.write_meta({**meta, **self._revision_meta()})
+        session.write_meta({**session.read_meta(), **meta, **self._revision_meta()})
+
+    def _boundary_hooks(self, name: str, run: RunRecord, **kwargs) -> bool:
+        from archon_horizon.vcs.session import boundary_lock
+        with boundary_lock(self.workspace):
+            return self._boundary_hooks_inner(name, run, **kwargs)
+
+    def _boundary_hooks_inner(
+        self, name: str, run: RunRecord, *, task: HorizonTask | None = None,
+        session: SessionLog | None = None, start_sha: str = "", end_sha: str = "",
+    ) -> bool:
+        """Run configured hooks; a scope violation always requeues its task."""
+        from .hooks import hook_issue, restore_violations, run_hook, violation_paths
+
+        values = {"task_id": task.id if task else "", "run_id": run.id,
+                  "session_dir": str(session.path) if session else "",
+                  "start_sha": start_sha, "end_sha": end_sha}
+        log_path = (session.path if session else self.workspace.state_path / "runs" / run.id) / "hooks.log"
+        violated = False
+        for command in self.workspace.hooks.get(name, ()):
+            result = run_hook(command, self.workspace, values=values, log_path=log_path)
+            self._emit("hook.completed" if result.returncode == 0 else "hook.failed",
+                       hook=name, command=command, returncode=result.returncode,
+                       task_id=values["task_id"], session_dir=values["session_dir"])
+            if result.returncode == 0:
+                continue
+            if name == "after_session" and result.returncode == 4 and task is not None:
+                violated = True
+                current = self.task_store.get(task.id)
+                self.task_store.append_history(task.id, {
+                    "at": utc_now().isoformat(), "actor": "system", "field": "status",
+                    "from": current.status.value, "to": TaskStatus.QUEUED.value,
+                    "note": "HomAlg write scope violation; returned to queued",
+                })
+                self.task_store.put(dataclasses.replace(current, status=TaskStatus.QUEUED, updated_at=utc_now()))
+                self._write_session_meta(session, {"status": "scope-violation"})
+                try:
+                    paths = violation_paths(result, self.workspace)
+                    values["end_sha"] = restore_violations(self.workspace, paths, start_sha, task.id)
+                    if self.workspace.session_ledger:
+                        from archon_horizon.vcs.session import corrected_interval
+                        values["end_sha"] = corrected_interval(self.workspace, start_sha, end_sha, paths)
+                    self._write_session_meta(session, {"restored_end_sha": values["end_sha"]})
+                    hook_issue(self.workspace, f"Scope violation: {task.id}", "Restored paths:\n" + "\n".join(paths))
+                    # The same hook regenerates derived state against the corrected tree.
+                    retry = run_hook(command, self.workspace, values=values, log_path=log_path)
+                    self._emit("hook.completed" if retry.returncode == 0 else "hook.failed",
+                               hook=name, command=command, returncode=retry.returncode, retry=True)
+                    if retry.returncode:
+                        hook_issue(self.workspace, f"Hook failed after scope restoration: {task.id}",
+                                   retry.stderr or retry.stdout or f"exit {retry.returncode}")
+                except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as exc:
+                    hook_issue(self.workspace, f"Scope restoration failed: {task.id}", str(exc))
+                continue
+            hook_issue(self.workspace, f"Hook failed: {name}",
+                       f"Command: {command}\nExit: {result.returncode}\n{result.stderr or result.stdout}")
+        return violated
 
     @staticmethod
     def _agent_harness_metadata(agent: object) -> dict[str, object]:
@@ -815,9 +872,30 @@ class Orchestrator:
 
     # ── one Ground / one Horizon step ───────────────────────────────
 
-    def _horizon_step(
+    def _horizon_step(self, run: RunRecord, task: HorizonTask, runlog: RunLog | None, **kwargs):
+        if not self.workspace.session_ledger:
+            return self._horizon_step_inner(run, task, runlog, **kwargs)
+        from archon_horizon.vcs.session import SessionConflict, SessionLedger
+        from .hooks import hook_issue
+        ledger = SessionLedger(self.workspace, task)
+        if kwargs.get("resume_session_id"):
+            kwargs["resume_session_id"] = None
+            self._emit("session.resume.fresh", task_id=task.id, reason="isolated source checkout")
+        try:
+            try:
+                ledger.acquire()
+                ledger.start()
+            except (SessionConflict, OSError, RuntimeError, subprocess.SubprocessError) as exc:
+                self._emit("task.blocked", task_id=task.id, reason="session-ledger", error=str(exc))
+                hook_issue(self.workspace, f"Concurrent session refused: {task.id}", str(exc))
+                return None
+            return self._horizon_step_inner(run, task, runlog, ledger=ledger, **kwargs)
+        finally:
+            ledger.close()
+
+    def _horizon_step_inner(
         self, run: RunRecord, task: HorizonTask, runlog: RunLog | None, *, round_index: int,
-        rounds_total: int, resume_session_id: str | None = None,
+        rounds_total: int, resume_session_id: str | None = None, ledger=None,
     ) -> HorizonResult | None:
         """One Horizon session: run a single task. Returns its result, or ``None``
         if it could not run (frozen / lock conflict) so the caller skips the
@@ -891,17 +969,13 @@ class Orchestrator:
             stop_watch, externally_terminal, budget_hit, watcher = self._task_terminal_watcher(
                 task.id, cancel, usage_path
             )
-            result = self.horizon.run_task(
-                self._horizon_context(
-                    run,
-                    task,
-                    self._log_dir(session),
-                    resume_session_id,
-                    cancel,
-                    round_index=round_index,
-                    rounds_total=rounds_total,
-                )
-            )
+            start_sha = ledger.start_sha if ledger else str(self._revision_meta().get("workspace_sha") or "")
+            self._write_session_meta(session, {"start_sha": start_sha})
+            context = self._horizon_context(run, task, self._log_dir(session), resume_session_id,
+                                            cancel, round_index=round_index, rounds_total=rounds_total)
+            if ledger:
+                context = dataclasses.replace(context, workspace=ledger.workspace)
+            result = self.horizon.run_task(context)
             stop_watch.set()
             watcher.join(timeout=1.0)
             if budget_hit:
@@ -984,15 +1058,44 @@ class Orchestrator:
                     "usage": result.metadata.get("usage"),
                     "engine_session_id": result.metadata.get("session_id"),
                 })
-            self._integrate_session(
-                run,
-                session,
-                role="horizon",
-                round_index=round_index,
-                project=task.project,
-                task_id=task.id,
-                projects=task_projects,
-            )
+            if ledger:
+                from archon_horizon.vcs.session import SessionConflict, boundary_lock
+                from .hooks import hook_issue
+                with boundary_lock(self.workspace):
+                    try:
+                        start_sha, end_sha, files = ledger.prepare_landing()
+                        self._write_session_meta(session, {"start_sha": start_sha, "end_sha": end_sha,
+                                                            "session_ledger": ledger.id})
+                        self._emit("workspace.session.integrated", run_id=run.id,
+                                   task_id=task.id, session=session.name if session else ledger.id,
+                                   files=list(files), workspace_commit=self._revision_meta().get("workspace_sha"))
+                        violated = self._boundary_hooks("after_session", run, task=task, session=session,
+                                                       start_sha=start_sha, end_sha=end_sha)
+                        if violated:
+                            final_status = TaskStatus.QUEUED
+                        else:
+                            final_status = self.task_store.get(task.id).status
+                    except (SessionConflict, OSError, RuntimeError, subprocess.SubprocessError) as exc:
+                        final_status = TaskStatus.QUEUED
+                        current = self.task_store.get(task.id)
+                        self.task_store.append_history(task.id, {
+                            "at": utc_now().isoformat(), "actor": "system", "field": "status",
+                            "from": current.status.value, "to": "queued", "note": str(exc),
+                        })
+                        self.task_store.put(dataclasses.replace(current, status=final_status, updated_at=utc_now()))
+                        self._write_session_meta(session, {"status": "integration-conflict", "recovery_path": str(ledger.path)})
+                        hook_issue(self.workspace, f"Session integration refused: {task.id}",
+                                   f"{exc}\nPreserved source snapshot: {ledger.path}")
+            else:
+                self._integrate_session(run, session, role="horizon", round_index=round_index,
+                                        project=task.project, task_id=task.id, projects=task_projects)
+                end_sha = str(self._revision_meta().get("workspace_sha") or start_sha)
+                self._write_session_meta(session, {"start_sha": start_sha, "end_sha": end_sha})
+                if self._boundary_hooks("after_session", run, task=task, session=session,
+                                        start_sha=start_sha, end_sha=end_sha):
+                    final_status = TaskStatus.QUEUED
+                else:
+                    final_status = self.task_store.get(task.id).status
 
             boundary = (
                 SyncBoundary.ON_BUILD_FAILURE
@@ -1252,9 +1355,11 @@ class Orchestrator:
         Runs are sequential — one session at a time on the single workspace
         ledger — so there is nothing to lock against.
         """
-        return self._run_locked(
-            run, dry_run=dry_run, resume=resume, rounds_override=rounds_override,
-        )
+        from archon_horizon.vcs.session import run_policy_lock
+        with run_policy_lock(self.workspace):
+            return self._run_locked(
+                run, dry_run=dry_run, resume=resume, rounds_override=rounds_override,
+            )
 
     def _run_locked(
         self,
@@ -1364,6 +1469,7 @@ class Orchestrator:
 
             if not dry_run:
                 self._queue_focus_for_round(run, initial=(not resume and i == 0))
+                self._boundary_hooks("before_round", run)
             # The hgraph skill reads a fresh DAG during horizon; only
             # the run's own projects need refreshing here.
             self._write_blueprint_dags(projects=self._run_scope_projects(run))
@@ -1597,6 +1703,11 @@ class Orchestrator:
         )
 
     def _write_blueprint_dags(self, *, projects: tuple[str, ...] | None = None) -> list[str]:
+        from archon_horizon.vcs.session import boundary_lock
+        with boundary_lock(self.workspace):
+            return self._write_blueprint_dags_unlocked(projects=projects)
+
+    def _write_blueprint_dags_unlocked(self, *, projects: tuple[str, ...] | None = None) -> list[str]:
         """(Re)generate the dashboard's hgraph-backed JSON cache.
 
         The compatibility path remains

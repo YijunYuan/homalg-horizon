@@ -2544,3 +2544,18 @@ button.linkish:hover { text-decoration: underline; }
   .board-columns { grid-template-columns: 1fr; }
   .board-column-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
 }
+
+/* HomAlgDB workspace scope, source audit and authoritative derived states. */
+.homalg-doc-filter { display:flex; align-items:center; gap:8px; margin-left:auto; font-size:12px; }
+.homalg-doc-filter select { max-width:230px; padding:5px; }
+.homalg-badges {display:inline-flex;gap:5px;flex-wrap:wrap;align-items:center;}
+.homalg-status {display:inline-block;border:2px solid #4a7357;border-radius:5px;padding:3px 7px;font-size:12px;line-height:1.4;}
+.homalg-source-links {display:flex;gap:8px;flex-wrap:wrap;font-size:12px;margin:10px 0;}
+.homalg-warning {color:#895400;background:#fff0d9;border-radius:4px;padding:3px 6px;}
+.homalg-reference-grid {display:grid;grid-template-columns:1fr 1fr;gap:20px;}
+.homalg-reference-grid>* {min-width:0;}
+.homalg-reference-grid img {width:100%;height:auto;}
+.homalg-reference-grid pre {white-space:pre-wrap;overflow-wrap:anywhere;max-height:80vh;overflow:auto;}
+.kind-dispute {background:#f1e8fa;color:#67438b;}
+.kind-document-error {background:#ffe0dc;color:#7d2018;}
+@media(max-width:800px){.homalg-reference-grid{grid-template-columns:1fr}.homalg-doc-filter{margin-left:0}}

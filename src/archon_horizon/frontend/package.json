@@ -1,29 +1,39 @@
 {
   "name": "archon-horizon-dashboard",
   "private": true,
-  "version": "0.1.5",
+  "version": "0.1.5+homalg.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --experimental-strip-types --test src/homalg.test.ts",
+    "test:e2e": "playwright test",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@viz-js/viz": "^3.28.0",
-    "katex": "^0.17.0",
+    "katex": "0.19.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^10.1.0",
-    "react-router-dom": "^6.30.4",
+    "react-router-dom": "7.18.5",
     "rehype-katex": "^7.0.1",
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0"
   },
   "devDependencies": {
+    "@playwright/test": "1.64.1",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
-    "@vitejs/plugin-react": "^4.3.1",
+    "@vitejs/plugin-react": "6.1.2",
     "typescript": "^5.4.5",
-    "vite": "^5.3.1"
+    "vite": "8.3.5"
+  },
+  "overrides": {
+    "katex": "$katex"
+  },
+  "engines": {
+    "node": ">=22.12"
   }
 }

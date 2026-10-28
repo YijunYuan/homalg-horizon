@@ -1,3 +1,10 @@
+> **HomAlg Horizon fork — 0.1.5+homalg.1.** This repository adapts Archon Horizon
+> for HomAlgDB. Install the built wheel from tag `v0.1.5-homalg.1`; its dashboard
+> assets are included. See [UPSTREAM.md](UPSTREAM.md) for provenance and patch scope,
+> and [docs/HOMALG.md](docs/HOMALG.md) for hooks, privacy and development commands.
+> The inherited upstream overview below describes general engine capabilities;
+> HomAlg node headers and the repository `AGENTS.md` govern formalization.
+
 <div align="center">
 
 # Archon Horizon
@@ -7,7 +14,7 @@
 *Workspace-first orchestration for long-horizon Lean 4 formalization agents*
 
 [![Live demo](https://img.shields.io/badge/live%20demo-open%20dashboard-brightgreen?logo=githubpages)](https://frenzymath.github.io/Archon-Horizon/)
-![Version](https://img.shields.io/badge/version-0.1.5-blue)
+![Version](https://img.shields.io/badge/version-0.1.5+homalg.1-blue)
 [![License](https://img.shields.io/badge/Apache-2.0-green)](./LICENSE)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
 ![Lean](https://img.shields.io/badge/domain-Lean%204-1f6feb)
@@ -67,7 +74,7 @@ The recommended way is running the one-liner below, inside a Python 3.11+ virtua
 
 ```bash
 # One-liner: fetch latest main, install, and run tool checks
-curl -sSL https://raw.githubusercontent.com/frenzymath/Archon-Horizon/refs/heads/main/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/YijunYuan/homalg-horizon/refs/heads/homalg/install.sh | bash
 ```
 
 If you prefer to install from source:

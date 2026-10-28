@@ -100,3 +100,24 @@ def test_run_dry_run_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) ->
     payload = _run(tmp_path, "run", ".", "--dry-run", "--json", capsys=capsys)
     assert payload["dry_run"] is True
     assert isinstance(payload["rounds"], list)
+
+
+def test_homalg_inbox_node_scopes_and_kinds(tmp_path: Path, capsys) -> None:
+    _workspace(tmp_path)
+    for kind, node in (("dispute", "Book1945.Thm_1"), ("document-error", "Other2000.Def_1")):
+        created = _run(tmp_path, "inbox", "add", "--kind", kind, "--node", node,
+                       "--node", "Shared2001.Def_2", "--to", "human", "--body", "Title\n\nDetails", "--json", capsys=capsys)
+        assert created["kind"] == kind
+        assert node in str(created["scope"])
+    listed = _run(tmp_path, "inbox", "list", "--node", "Book1945.Thm_1", "--json", capsys=capsys)
+    assert len(listed["items"]) == 1
+    assert listed["items"][0]["kind"] == "dispute"
+
+
+def test_task_add_sets_repeated_roadmap_refs(tmp_path: Path, capsys) -> None:
+    _workspace(tmp_path)
+    data = _run(tmp_path, "task", "add", "--id", "Book1945.STMT.1", "--project", "p",
+                "--objective", "State the node", "--roadmap-ref", "Book1945", "--roadmap-ref",
+                "Book1945.STMT", "--file", "HomAlg/Book1945/Def_1.lean", "--json", capsys=capsys)
+    assert data["roadmap_refs"] == ["Book1945", "Book1945.STMT"]
+    assert (tmp_path / ".archon-horizon/tasks/items/Book1945.STMT.1.yaml").is_file()

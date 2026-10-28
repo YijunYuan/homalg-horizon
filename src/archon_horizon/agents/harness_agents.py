@@ -66,6 +66,8 @@ def _agent_env(role: str, context: HorizonContext) -> dict[str, str]:
         "ARCHON_HORIZON_INTERACTIVE": "0",
     }
     env["ARCHON_HORIZON_ROOT"] = str(context.workspace.root.resolve())
+    if context.workspace.metadata.get("canonical_root"):
+        env["HOMALG_SESSION_MAIN_ROOT"] = str(context.workspace.metadata["canonical_root"])
     env["ARCHON_HORIZON_SKILL"] = str(
         (context.workspace.root / ".claude" / "skills" / "horizon" / "SKILL.md").resolve()
     )

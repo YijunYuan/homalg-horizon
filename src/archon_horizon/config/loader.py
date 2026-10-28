@@ -139,6 +139,8 @@ def build_workspace(cfg: WorkspaceConfig, root: Path) -> Workspace:
         root=root,
         state_dir=Path(cfg.state_dir),
         rounds=cfg.rounds,
+        hooks=cfg.hooks,
+        session_ledger=cfg.session_ledger,
         projects=projects,
     )
 

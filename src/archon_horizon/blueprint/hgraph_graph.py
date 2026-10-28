@@ -125,7 +125,7 @@ def build_project_graph(
     # a labelled remark or example appears as an unproved TODO in the dashboard.
     tex_nodes = [
         n for n in graph.nodes(type="tex")
-        if n.meta.get("label") and is_countable({"type": n.meta.get("content_type")})
+        if n.meta.get("label") and is_countable(n.meta)
     ]
 
     # Unlabelled tex nodes (source quotes, standalone proof bodies) and

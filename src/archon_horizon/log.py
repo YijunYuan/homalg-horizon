@@ -16,7 +16,7 @@ from rich.text import Text
 _console = Console()
 _err_console = Console(stderr=True)
 _PREFIX = "[bold #d8b4fe]\\[HORIZON][/bold #d8b4fe]"
-_REPO_URL = "https://github.com/frenzymath/Archon-Horizon"
+_REPO_URL = "https://github.com/YijunYuan/homalg-horizon"
 _BANNER_TEXT = "Archon Horizon"
 _BANNER_FONT = "smslant"
 

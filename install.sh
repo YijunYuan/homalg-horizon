@@ -1,56 +1,23 @@
 #!/usr/bin/env bash
-#
-# Archon Horizon installer.
-#
-#   curl -sSL https://raw.githubusercontent.com/frenzymath/Archon-Horizon/refs/heads/main/install.sh | bash
-#
-# Downloads the latest main tarball, installs the package, and runs `horizon
-# setup` to check/install external tools. Override ORG/REPO/BRANCH via env to
-# install from a fork or branch.
-
+# Install a tagged HomAlg fork wheel with its compiled dashboard, never source main.
 set -euo pipefail
-
-ORG="${ARCHON_HORIZON_ORG:-frenzymath}"
-REPO="${ARCHON_HORIZON_REPO:-Archon-Horizon}"
-BRANCH="${ARCHON_HORIZON_BRANCH:-main}"
-
-red()   { printf '\033[31m%s\033[0m\n' "$1"; }
-green() { printf '\033[32m%s\033[0m\n' "$1"; }
-
-if ! python3 -m pip --version >/dev/null 2>&1; then
-    red "Error: pip is not available. See https://pip.pypa.io/en/stable/installation/"
-    exit 1
-fi
-
-TEMP_DIR="$(mktemp -d)"
-cleanup() { rm -rf "$TEMP_DIR"; }
-trap cleanup EXIT
-
-cd "$TEMP_DIR"
-
-green "Downloading Archon Horizon (${ORG}/${REPO}@${BRANCH})..."
-curl -fL "https://github.com/${ORG}/${REPO}/archive/refs/heads/${BRANCH}.tar.gz" -o archon-horizon.tar.gz
-tar -xzf archon-horizon.tar.gz
-cd "${REPO}-${BRANCH}"
-
-# The dashboard SPA (frontend/dist) is a build artifact — it is gitignored and so
-# absent from the source tarball. Build it here (best-effort) so pip packages it
-# into the installed dashboard, including the run-logs viewer. Without Node the
-# install still succeeds; `horizon dashboard --static` then falls back to the
-# read-only Python page (no logs) until the SPA is built.
-if command -v npm >/dev/null 2>&1; then
-    green "Building the dashboard SPA..."
-    ( npm --prefix src/archon_horizon/frontend install \
-      && npm --prefix src/archon_horizon/frontend run build ) \
-      || red "Frontend build failed; the dashboard will use the read-only fallback."
-else
-    red "Node/npm not found; skipping dashboard build (the dashboard will use the read-only fallback)."
-fi
-
-green "Installing the archon-horizon package..."
-python3 -m pip install .
-
-green "Running 'horizon setup' to check external tools..."
-horizon setup || true
-
-green "Done. Run 'horizon init' in a workspace to get started."
+python3 - <<'PY'
+import json, os, re, shutil, subprocess, sys
+from urllib.request import Request, urlopen
+repo = os.environ.get('HOMALG_HORIZON_REPOSITORY', 'YijunYuan/homalg-horizon')
+if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repo):
+    raise SystemExit('HOMALG_HORIZON_REPOSITORY must be owner/repository')
+with urlopen(Request(f'https://api.github.com/repos/{repo}/releases/latest', headers={'User-Agent':'homalg-horizon-installer'}), timeout=30) as response:
+    release = json.load(response)
+tag = release.get('tag_name', '')
+match = re.fullmatch(r'v([0-9]+\.[0-9]+\.[0-9]+)-homalg\.([0-9]+)', tag)
+if not match or release.get('draft') or release.get('prerelease'):
+    raise SystemExit('No stable tagged HomAlg release found')
+name = f'archon_horizon-{match[1]}+homalg.{match[2]}-py3-none-any.whl'
+expected = f'https://github.com/{repo}/releases/download/{tag}/{name}'
+assets = [a for a in release.get('assets', []) if a.get('name') == name]
+if len(assets) != 1 or assets[0].get('browser_download_url', '').replace('%2B','+').replace('%2b','+') != expected:
+    raise SystemExit('Release is missing its built wheel')
+argv = ['uv', 'tool', 'install', '--force', expected] if shutil.which('uv') else [sys.executable, '-m', 'pip', 'install', '--upgrade', expected]
+subprocess.run(argv, check=True)
+PY

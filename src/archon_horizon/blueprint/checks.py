@@ -10,6 +10,7 @@ descriptor/LLM subagents complement these; they do not replace them.
 from __future__ import annotations
 
 from typing import Any
+import re
 
 # Blueprint environments that represent a formalisation obligation — a statement
 # that should get a ``\lean`` link and eventually a proof. Prose environments
@@ -22,6 +23,11 @@ COUNTABLE_KINDS: frozenset[str] = frozenset(
 
 def is_countable(node: dict[str, Any]) -> bool:
     """True when a node is a formalisation obligation (not prose like a remark)."""
+    # HomAlg registers mathematical remarks/examples as explicit obligations.
+    # Namespaced DocKey.LocalId labels distinguish them from ordinary prose.
+    label = str(node.get("label") or node.get("id") or "").removeprefix("label:")
+    if re.fullmatch(r"[A-Z][A-Za-z]*[0-9]{4}[A-Za-z0-9]*\.[A-Z][A-Za-z0-9]*(_[A-Za-z0-9]+)*", label):
+        return True
     # Published DAGs historically used both ``type`` and ``kind``.  Prefer a
     # known value from either field so old cache files can be filtered without
     # a resync; an unrecognised value is deliberately not guessed as a theorem.

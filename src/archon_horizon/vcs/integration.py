@@ -161,29 +161,31 @@ def integrate_workspace_run(
     if not git_available():
         return CommitOutcome(attempted=False, error="git not available")
     try:
-        # Neutralize any in-tree .git in the scoped projects, so the ledger stores
-        # their files rather than a submodule gitlink (e.g. a project cloned with
-        # its own git). Runs even when no Horizon session touched the project.
-        for name in projects:
-            if name in workspace.projects:
-                neutralize_nested_git(workspace.project_path(name))
-        with _WORKSPACE_COMMIT_LOCK, _cross_process_commit_lock(workspace):
-            git = WorkspaceGit(workspace.root)
-            git.init()
-            # Drop any stale submodule gitlink left from before a project's nested
-            # .git was neutralized, so the commit below re-tracks its files.
+        from .session import boundary_lock
+        with boundary_lock(workspace):
+            # Neutralize any in-tree .git in the scoped projects, so the ledger stores
+            # their files rather than a submodule gitlink (e.g. a project cloned with
+            # its own git). Runs even when no Horizon session touched the project.
             for name in projects:
                 if name in workspace.projects:
-                    git.unstage_gitlink(workspace.project_path(name).relative_to(workspace.root).as_posix())
-            sha = git.commit(
-                message or f"workspace: integrate run {run_id}",
-                paths=_workspace_commit_paths(workspace, projects),
-                author=author,
-                trailers=trailers,
-                allow_empty=allow_empty,
-            )
-            files = git.files_in_commit(sha) if sha else ()
-        return CommitOutcome(attempted=True, sha=sha, changed=sha is not None, files=files)
+                    neutralize_nested_git(workspace.project_path(name), workspace_root=workspace.root)
+            with _WORKSPACE_COMMIT_LOCK, _cross_process_commit_lock(workspace):
+                git = WorkspaceGit(workspace.root)
+                git.init()
+                # Drop any stale submodule gitlink left from before a project's nested
+                # .git was neutralized, so the commit below re-tracks its files.
+                for name in projects:
+                    if name in workspace.projects:
+                        git.unstage_gitlink(workspace.project_path(name).relative_to(workspace.root).as_posix())
+                sha = git.commit(
+                    message or f"workspace: integrate run {run_id}",
+                    paths=_workspace_commit_paths(workspace, projects),
+                    author=author,
+                    trailers=trailers,
+                    allow_empty=allow_empty,
+                )
+                files = git.files_in_commit(sha) if sha else ()
+            return CommitOutcome(attempted=True, sha=sha, changed=sha is not None, files=files)
     except GitError as exc:
         return CommitOutcome(attempted=True, error=str(exc))
 

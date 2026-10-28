@@ -48,7 +48,19 @@ class DashboardCommand:
         self.transcript_page_limit = transcript_page_limit
 
     def run(self) -> None:
-        from archon_horizon.render.static_export import export_static, write_pages_workflow
+        from archon_horizon.render.static_export import export_static
+        import subprocess
+
+        if self.workflow:
+            raise ValueError("HomAlg static dashboards are private; Pages workflow generation is disabled")
+        target = (self.root / self.out).resolve()
+        root = self.root.resolve()
+        if target.is_relative_to(root):
+            relative = target.relative_to(root).as_posix()
+            ignored = subprocess.run(["git", "check-ignore", "-q", "--", relative + "/"],
+                                     cwd=root, check=False).returncode == 0
+            if target == root or not ignored:
+                raise ValueError("static --out must be outside the repository or inside a gitignored directory")
 
         from archon_horizon.server.service import WorkspaceService
 
@@ -64,11 +76,7 @@ class DashboardCommand:
 
         workflow_path: Path | None = None
         workflow_status = ""
-        if self.workflow:
-            wf, workflow_status = write_pages_workflow(self.root, out)
-            workflow_path = wf if workflow_status != "outside" else None
-
-        commit_sha = self._commit_export(out, workflow_path)
+        commit_sha = None
 
         if self.as_json:
             emit_json({
@@ -95,64 +103,8 @@ class DashboardCommand:
             self._report_workflow(out, workflow_path, workflow_status, committed=commit_sha)
 
     def _commit_export(self, out: Path, workflow_path: Path | None) -> str | None:
-        """Commit the exported dashboard (and Pages workflow) for GitHub publish.
-
-        Prefer the user's root ``.git`` when present: that is the repository
-        pushed to GitHub / GitHub Pages. Fall back to the out-of-tree Horizon
-        ledger only when there is no user repo (ledger-only workspaces).
-
-        The static export already materializes roadmap/inbox/graph/run snapshots
-        under ``dashboard/data/`` — it does **not** need raw hgraph node files or
-        live ``.archon-horizon/runs`` in git history. Agents keep committing Lean
-        and durable Horizon state to the ledger; publish is a separate snapshot.
-        """
-        from archon_horizon.vcs.git import (
-            GitError,
-            WorkspaceGit,
-            commit_user_repo_paths,
-            git_available,
-            user_repo_git_dir,
-        )
-
-        if not git_available():
-            log.warn("git not available; exported dashboard left uncommitted.")
-            return None
-        paths: list[str] = []
-        for candidate in (out, workflow_path):
-            if candidate is None:
-                continue
-            try:
-                paths.append(candidate.resolve().relative_to(self.root.resolve()).as_posix())
-            except ValueError:
-                # Outside the workspace repo (custom --out); nothing to commit.
-                continue
-        if not paths:
-            return None
-        message = "workspace: publish static dashboard"
-        if user_repo_git_dir(self.root) is not None:
-            try:
-                sha = commit_user_repo_paths(self.root, message, paths)
-            except GitError as exc:
-                log.warn(f"could not commit exported dashboard to user .git: {exc}")
-                return None
-            if sha:
-                log.info(
-                    f"committed exported dashboard to the user repository ({sha[:10]}) "
-                    "for GitHub / Pages publish."
-                )
-            else:
-                log.info("static dashboard already up to date in the user repository.")
-            return sha
-        try:
-            git = WorkspaceGit(self.root)
-            git.init()
-            sha = git.commit(message, paths=paths)
-        except GitError as exc:
-            log.warn(f"could not commit exported dashboard: {exc}")
-            return None
-        if sha:
-            log.info(f"committed exported dashboard to the workspace ledger ({sha[:10]}).")
-        return sha
+        """Private static snapshots never modify either repository history."""
+        return None
 
     def _report_workflow(
         self, out: Path, workflow_path: Path | None, status: str, *, committed: str | None

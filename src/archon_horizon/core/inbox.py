@@ -24,6 +24,8 @@ class InboxKind(StrEnum):
     # `hint` is what humans normally use; the rest are mostly for the AI.
     HINT = "hint"
     ISSUE = "issue"
+    DISPUTE = "dispute"
+    DOCUMENT_ERROR = "document-error"
     # A standing constraint on the Horizon agent (the soft "freeze"): e.g. "do not
     # change the signature of `Foo.bar`". Rendered in the prompt as protected;
     # respected, not hard-enforced, so semantic constraints are expressible.

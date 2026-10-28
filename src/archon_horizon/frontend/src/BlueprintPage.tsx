@@ -4,8 +4,10 @@ import { getBlueprintChapters, getBlueprintDag, type BlueprintChaptersResponse, 
 import { BibliographyView, bibMapFrom, buildBlueprintModel, ChapterView, TitleInline } from './components/BlueprintDoc';
 import ProjectPicker from './components/ProjectPicker';
 import styles from './BlueprintPage.module.css';
+import {currentDag,filterDag,documentBlocks,overlayOf} from './homalg';
+import {HomalgBadges,SourceLinks} from './HomalgNode';
 
-type BlueprintDeclStatus = 'leanok' | 'mathlibok' | 'sorry' | 'none';
+type BlueprintDeclStatus = 'leanok' | 'mathlibok' | 'sorry' | 'none' | 'in-progress' | 'statement-complete' | 'proof-complete' | 'error' | 'pruned';
 type BlueprintDeclIndexItem = {
   label: string;
   kind: string;
@@ -17,6 +19,7 @@ type BlueprintDeclIndexItem = {
   leanNames: string[];
   status: BlueprintDeclStatus;
   graphId?: string;
+  node?: any;
 };
 
 // Documentation/proof environments are renderable, but are not formalisation
@@ -27,6 +30,7 @@ const NO_STATUS_KINDS = new Set([
 ]);
 
 const STATUS_LABEL: Record<BlueprintDeclStatus, string> = {
+  'in-progress':'○ in progress','statement-complete':'◐ statement complete','proof-complete':'● proof complete',error:'✕ error',pruned:'⊘ pruned',
   leanok: '✓ leanok',
   mathlibok: 'ⓜ mathlib',
   sorry: '△ sorry',
@@ -35,12 +39,13 @@ const STATUS_LABEL: Record<BlueprintDeclStatus, string> = {
 
 // One color per status, everywhere squares/segments appear (hgraph's palette).
 const STATUS_COLOR: Record<BlueprintDeclStatus, string> = {
+  'in-progress':'#ffffff','statement-complete':'#d6efdc','proof-complete':'#247347',error:'#ffe0dc',pruned:'#d5dcd7',
   mathlibok: '#0B5FD0',
   leanok: '#137333',
   sorry: '#C2410C',
   none: '#6B7280',
 };
-const STATUS_ORDER: BlueprintDeclStatus[] = ['mathlibok', 'leanok', 'sorry', 'none'];
+const STATUS_ORDER: BlueprintDeclStatus[] = ['proof-complete','statement-complete','in-progress','error','pruned','mathlibok', 'leanok', 'sorry', 'none'];
 
 function proved(n: any) { return n?.proved ?? n?.leanok ?? false; }
 function mathlib(n: any) { return n?.mathlib_ok ?? n?.mathlibok ?? false; }
@@ -60,12 +65,12 @@ function gatherDecls(
     // interface.
     if (block.t === 'env') {
       const envName = String(block.name ?? 'env').replace(/[^A-Za-z0-9_-]/g, '_');
-      if (NO_STATUS_KINDS.has(envName)) return;
+      if (NO_STATUS_KINDS.has(envName) && !overlayOf(dagById.get(block.meta?.label))) return;
     }
     if (block.t === 'env' && block.meta?.label) {
       const label = String(block.meta.label);
       const envName = String(block.name ?? 'env').replace(/[^A-Za-z0-9_-]/g, '_');
-      if (!NO_STATUS_KINDS.has(envName)) {
+      if (!NO_STATUS_KINDS.has(envName) || overlayOf(dagById.get(label))) {
         const target = labels.get(label);
         const dag = dagById.get(label);
         const isMathlib = Boolean(block.meta.mathlibok) || mathlib(dag);
@@ -80,7 +85,8 @@ function gatherDecls(
           anchor: target?.anchor ?? block.anchor ?? '',
           title: String(block.meta.human ?? ''),
           leanNames: (block.meta.lean ?? []).map(String),
-          status: isMathlib ? 'mathlibok' : isLeanOk ? 'leanok' : isSorry ? 'sorry' : 'none',
+          status: overlayOf(dag) ? overlayOf(dag).headline || 'pruned' : isMathlib ? 'mathlibok' : isLeanOk ? 'leanok' : isSorry ? 'sorry' : 'none',
+          node: dag,
           graphId: dag?.id ? String(dag.id) : label,
         });
       }
@@ -150,6 +156,8 @@ export default function BlueprintPage({ state }: { state: any }) {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const requestedProject = searchParams.get('project') ?? '';
+  const docFilter = searchParams.get('doc') || '';
+  const docSuffix = docFilter ? `&doc=${encodeURIComponent(docFilter)}` : '';
   const focusLabel = searchParams.get('focus') ?? '';
   const slugParam = searchParams.get('slug') ?? '';
   const anchorParam = searchParams.get('anchor') ?? '';
@@ -190,10 +198,11 @@ export default function BlueprintPage({ state }: { state: any }) {
   const chapters = useMemo(() => data?.chapters ?? [], [data]);
   const bibEntries = useMemo(() => data?.bib ?? [], [data]);
   const bib = useMemo(() => bibMapFrom(bibEntries), [bibEntries]);
-  const { doc, labels } = useMemo(() => buildBlueprintModel(chapters, true), [chapters]);
+  const { doc: allChapters, labels } = useMemo(() => buildBlueprintModel(chapters, true), [chapters]);
+  const doc = useMemo(() => !docFilter ? allChapters : allChapters.filter(chapter => JSON.stringify(chapter.blocks).includes(`${docFilter}.`)).map(chapter => ({...chapter,blocks:documentBlocks(chapter.blocks,docFilter)})),[allChapters,docFilter]);
   const dagNodes: any[] = useMemo(
-    () => fullDag?.nodes ?? state.blueprints?.[project]?.nodes ?? [],
-    [fullDag, state.blueprints, project],
+    () => filterDag(currentDag(fullDag,state.blueprints?.[project]),docFilter)?.nodes ?? [],
+    [fullDag, state.blueprints, project,docFilter],
   );
   const dagById = useMemo(() => new Map(dagNodes.map((n) => [String(n.id), n])), [dagNodes]);
   const leanSource = useMemo(() => {
@@ -258,8 +267,8 @@ export default function BlueprintPage({ state }: { state: any }) {
   const toggleOpen = useCallback((slug: string) => setOpen((v) => { const n = new Set(v); n.has(slug) ? n.delete(slug) : n.add(slug); return n; }), []);
   const toggleExpand = useCallback((slug: string) => setExpanded((v) => { const n = new Set(v); n.has(slug) ? n.delete(slug) : n.add(slug); return n; }), []);
   const openGraph = useCallback((label: string) => {
-    navigate(`/dag?project=${encodeURIComponent(project)}&focus=${encodeURIComponent(label)}`);
-  }, [navigate, project]);
+    navigate(`/dag?project=${encodeURIComponent(project)}&focus=${encodeURIComponent(label)}${docSuffix}`);
+  }, [navigate, project,docSuffix]);
   const openLean = useCallback((name: string) => {
     const target = leanTargets.get(name) ?? leanTargets.get(name.split('.').pop() ?? name);
     if (!target) return;
@@ -279,7 +288,7 @@ export default function BlueprintPage({ state }: { state: any }) {
     const out = new Map<string, BlueprintDeclIndexItem[]>();
     for (const ch of doc) {
       out.set(ch.slug, gatherDecls(ch.blocks as any[], labels as any, dagById)
-        .filter((d) => !NO_STATUS_KINDS.has(d.envName)));
+        .filter((d) => overlayOf(d.node) || !NO_STATUS_KINDS.has(d.envName)));
     }
     return out;
   }, [doc, labels, dagById]);
@@ -382,6 +391,7 @@ export default function BlueprintPage({ state }: { state: any }) {
                 labels={labels}
                 bib={bib}
                 leanSource={leanSource}
+                homalgNodes={dagById}
                 onNavigate={openTo}
                 onOpenInGraph={openGraph}
                 onOpenInLean={openLean}
@@ -422,7 +432,8 @@ export default function BlueprintPage({ state }: { state: any }) {
                       <span className={styles.declLabel}>{item.label}</span>
                     </button>
                     <span className={styles.declActions}>
-                      <span className={`${styles.declStatus} ${styles[`status_${item.status}`]}`}>{STATUS_LABEL[item.status]}</span>
+                      <span className={`${styles.declStatus} ${styles[`status_${item.status}`]}`}>{overlayOf(item.node) ? <HomalgBadges node={item.node}/> : STATUS_LABEL[item.status]}</span>
+                      <SourceLinks sources={item.node?.sources}/>
                       {leanName && (() => {
                         const resolvable = leanTargets.has(leanName) || leanTargets.has(leanName.split('.').pop() ?? leanName);
                         return (

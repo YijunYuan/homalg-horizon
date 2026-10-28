@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
 import signal
 import subprocess
 import sys
@@ -29,9 +30,8 @@ def _write_result(root: Path, result: dict[str, object], fingerprint: str) -> No
     if not session_raw:
         return
     session = Path(session_raw).resolve()
-    try:
-        session.relative_to(root.resolve())
-    except ValueError:
+    if not (session.is_relative_to(root.resolve())
+            or session.is_relative_to((root / ".archon-horizon" / "runs").resolve())):
         return
     directory = session / "checks"
     directory.mkdir(parents=True, exist_ok=True)
@@ -82,6 +82,17 @@ def check(
         command = ["lake", "env", "lean", str(source)]
     else:
         command = ["lake", "build", *targets]
+        if not targets and (root / "config.yaml").is_file():
+            from archon_horizon.config.loader import load_config
+            cfg = load_config(root)
+            matching = [project for project in cfg.projects.values()
+                        if (root / project.path).resolve() == cwd and project.build_command]
+            if len(matching) > 1:
+                raise ValueError("More than one project supplies a build command for this directory")
+            if matching:
+                command = shlex.split(matching[0].build_command)
+                if not command:
+                    raise ValueError("Configured project build command is empty")
 
     fingerprint = hashlib.sha256(
         json.dumps({"cwd": str(cwd), "command": command}, sort_keys=True).encode("utf-8")
@@ -132,6 +143,7 @@ def check(
         process = subprocess.Popen(
             command,
             cwd=cwd,
+            env={**os.environ, "HOMALG_BUILD_LOCK_HELD": "1"},
             start_new_session=True,
             stdout=sys.stderr if as_json else None,
             stderr=sys.stderr if as_json else None,

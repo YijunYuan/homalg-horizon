@@ -1,3 +1,4 @@
+import {nodeAppearance,overlayOf} from './homalg';
 const DEF_KINDS = new Set(['definition', 'example', 'remark', 'notation', 'convention']);
 // These environments can be labelled and rendered in the document, but they
 // are not formalisation targets. Keep this filter here as a cache-safe guard:
@@ -66,7 +67,7 @@ export function buildChapterGraph(rawNodes: any[], rawEdges: any[]): ChapterGrap
   const unique = new Map<string, any>();
   rawNodes.forEach((node) => {
     const kind = String(node?.type ?? node?.kind ?? '').toLowerCase();
-    if (node?.id != null && !NON_FORMALIZATION_KINDS.has(kind) && !unique.has(String(node.id))) {
+    if (node?.id != null && (overlayOf(node) || !NON_FORMALIZATION_KINDS.has(kind)) && !unique.has(String(node.id))) {
       unique.set(String(node.id), node);
     }
   });
@@ -92,14 +93,14 @@ export function buildChapterGraph(rawNodes: any[], rawEdges: any[]): ChapterGrap
   const deps = new Map<string, string[]>();
   ids.forEach((id) => deps.set(id, []));
   edges.forEach(([source, target]) => deps.get(target)!.push(source));
-  const locallyDone = (node: any) => DONE.has(String(node.lean_status || '')) || !!node.proved || !!node.mathlib_ok;
+  const locallyDone = (node: any) => overlayOf(node) ? overlayOf(node).headline === 'proof-complete' : DONE.has(String(node.lean_status || '')) || !!node.proved || !!node.mathlib_ok;
   const closedMemo = new Map<string, boolean>();
   const closing = new Set<string>();
   const isClosed = (id: string): boolean => {
     if (closedMemo.has(id)) return closedMemo.get(id)!;
     if (closing.has(id)) return false;
     closing.add(id);
-    const result = locallyDone(unique.get(id)) && (deps.get(id) || []).every(isClosed);
+    const result = overlayOf(unique.get(id)) ? locallyDone(unique.get(id)) : locallyDone(unique.get(id)) && (deps.get(id) || []).every(isClosed);
     closing.delete(id);
     closedMemo.set(id, result);
     return result;
@@ -166,6 +167,12 @@ export function chapterDot(model: ChapterGraph, expanded: number | null, maxLeve
     dot += `subgraph cluster_${chapter.key} { label="${escapeDot(chapter.label)}  (select background to collapse)";style="rounded,filled";fillcolor="${COLORS.expandedFill}";color="${COLORS.chapterBorder}";penwidth=2.4;fontcolor="${COLORS.expandedText}";fontsize=12.5;\n`;
     model.nodes.forEach((node) => {
       if (!visible.has(node.id)) return;
+      const appearance = nodeAppearance(node.raw);
+      if (appearance) {
+        const text = `${appearance.glyph} ${node.raw.title || node.id}${overlayOf(node.raw).needs_repair ? ' ⚒' : ''}`;
+        dot += `"${escapeDot(node.id)}" [shape=${appearance.shape},style="rounded,filled${appearance.dashed ? ',dashed' : ''}",fillcolor="${appearance.fill}",color="${appearance.border}",fontcolor="${appearance.color}",penwidth=2.4,label="${dotLabel(text)}"];\n`;
+        return;
+      }
       const definition = DEF_KINDS.has(String(node.raw.type || node.raw.kind || ''));
       dot += `"${escapeDot(node.id)}" [shape=${definition ? 'box' : 'ellipse'},style=${definition ? '"rounded,filled"' : '"filled"'},fillcolor="${COLORS.fill[node.proof]}",color="${COLORS.border[node.statement]}",fontcolor="${COLORS.nodeText}",label="${dotLabel(node.raw.title || node.id)}"];\n`;
     });

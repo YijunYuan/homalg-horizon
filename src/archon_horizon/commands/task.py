@@ -240,6 +240,7 @@ def add_task(
     priority: str = typer.Option("normal", "--priority"),
     status: str = typer.Option("queued", "--status"),
     author: str | None = typer.Option(None, "--author", help="Who is adding the task (ground|horizon|human)."),
+    roadmap_ref: list[str] = typer.Option(None, "--roadmap-ref", help="Link to roadmap item id(s); repeatable."),
     as_json: bool = _JSON,
 ) -> None:
     """Add a new task (safe YAML write). Open to agents and humans alike."""
@@ -251,6 +252,7 @@ def add_task(
     actor = author or agent_author("human")
     project_tuple = tuple(projects) if projects else (project,)
     task = HorizonTask(
+        roadmap_refs=tuple(dict.fromkeys(roadmap_ref or ())),
         id=task_id,
         project=project,
         objective=objective,

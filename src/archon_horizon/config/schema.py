@@ -23,6 +23,17 @@ class ConfigError(ValueError):
     """
 
 
+def _workspace_hooks(raw: object) -> dict[str, tuple[str, ...]]:
+    if not isinstance(raw, dict) or set(raw) - {"before_round", "after_session"}:
+        raise ConfigError("workspace.hooks must contain only before_round and after_session")
+    hooks = {}
+    for name, commands in raw.items():
+        if not isinstance(commands, list) or any(not isinstance(c, str) or not c.strip() for c in commands):
+            raise ConfigError(f"workspace.hooks.{name} must be a list of nonempty commands")
+        hooks[name] = tuple(commands)
+    return hooks
+
+
 @dataclass(frozen=True, slots=True)
 class HarnessConfig:
     name: str
@@ -280,6 +291,9 @@ class WorkspaceConfig:
     name: str
     state_dir: str = ".archon-horizon"
     rounds: int = 1
+    manage_gitignore: bool = True
+    session_ledger: bool = False
+    hooks: dict[str, tuple[str, ...]] = field(default_factory=dict)
     horizon_harness: str | None = None
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     budget: BudgetConfig = field(default_factory=BudgetConfig)
@@ -298,10 +312,17 @@ class WorkspaceConfig:
     def from_raw(cls, data: dict[str, Any]) -> "WorkspaceConfig":
         ws = data.get("workspace", {})
         freeze = data.get("freeze", {})
+        if not isinstance(ws.get("manage_gitignore", True), bool):
+            raise ConfigError("workspace.manage_gitignore must be a boolean")
+        if not isinstance(ws.get("session_ledger", False), bool):
+            raise ConfigError("workspace.session_ledger must be a boolean")
         return cls(
             name=ws["name"],
             state_dir=ws.get("state_dir", ".archon-horizon"),
             rounds=int(ws.get("rounds", 1)),
+            manage_gitignore=ws.get("manage_gitignore", True),
+            session_ledger=ws.get("session_ledger", False),
+            hooks=_workspace_hooks(ws.get("hooks", {})),
             horizon_harness=ws.get("horizon_agent", {}).get("harness"),
             scheduler=SchedulerConfig.from_raw(ws.get("scheduler", {})),
             budget=BudgetConfig.from_raw(ws.get("budget", {}) or {}),

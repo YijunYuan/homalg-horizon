@@ -9,7 +9,7 @@ description = "Workspace-first orchestration for long-horizon Lean formalization
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"]
 authors = [{ name = "Axel Delaval" }]
 keywords = ["lean", "lean4", "formalization", "agents", "orchestration", "mathlib"]
 classifiers = [
@@ -36,10 +36,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/frenzymath/Archon-Horizon"
-Repository = "https://github.com/frenzymath/Archon-Horizon"
-Changelog = "https://github.com/frenzymath/Archon-Horizon/blob/main/docs/CHANGELOG.md"
-Issues = "https://github.com/frenzymath/Archon-Horizon/issues"
+Homepage = "https://github.com/YijunYuan/homalg-horizon"
+Repository = "https://github.com/YijunYuan/homalg-horizon"
+Changelog = "https://github.com/YijunYuan/homalg-horizon/blob/main/docs/CHANGELOG.md"
+Issues = "https://github.com/YijunYuan/homalg-horizon/issues"
 
 [project.scripts]
 # Thin entry: ``agent-hook-fast`` bypasses the full Typer CLI import so engine

@@ -44,6 +44,7 @@ from archon_horizon.commands import update as update_cmd
 from archon_horizon.commands import usage as usage_cmd
 from archon_horizon.config.schema import ConfigError
 from archon_horizon.log import log
+from archon_horizon.vcs.session import SessionConflict
 
 
 class _BannerGroup(typer.core.TyperGroup):
@@ -118,6 +119,14 @@ def callback(
         root = Path(os.environ["ARCHON_HORIZON_ROOT"])
     json_mode = _machine_output_requested()
     ctx.obj = {"root": root, "json": json_mode}
+    if (ctx.invoked_subcommand in {"task", "roadmap", "inbox", "graph"}
+            and (root / "config.yaml").is_file()
+            and os.environ.get("HOMALG_BOUNDARY_LOCK_HELD") != "1"):
+        from archon_horizon.config.loader import build_workspace, load_config
+        from archon_horizon.vcs.session import boundary_lock
+        workspace = build_workspace(load_config(root), root.resolve())
+        if workspace.session_ledger:
+            ctx.with_resource(boundary_lock(workspace))
     if json_mode:
         # Keep stdout pure JSON: send all human chrome (and the banner) to stderr.
         log.route_to_stderr()
@@ -224,7 +233,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         # actionable message cleanly instead of dumping a traceback.
         log.error(str(exc))
         return 1
-    except ConfigError as exc:
+    except (ConfigError, SessionConflict) as exc:
         # A malformed config.yaml is user error, not a crash: print the
         # actionable message rather than a traceback.
         log.error(str(exc))

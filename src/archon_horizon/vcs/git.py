@@ -339,6 +339,7 @@ if [ -n "$ARCHON_COMMIT_PATHS_FILE" ] && [ -f "$ARCHON_COMMIT_PATHS_FILE" ]; the
     ok=0
     while IFS= read -r allow; do
       [ -n "$allow" ] || continue
+      [ "$allow" = "." ] && { ok=1; break; }
       case "$p" in
         "$allow"|"$allow"/*) ok=1; break ;;
       esac
@@ -428,7 +429,7 @@ def install_ledger_git_wrapper(state_dir: Path) -> Path | None:
         return None
 
 
-def neutralize_nested_git(work_tree: Path) -> str | None:
+def neutralize_nested_git(work_tree: Path, *, workspace_root: Path | None = None) -> str | None:
     """Rename a project's in-tree ``.git`` directory to ``.git.disabled``.
 
     Archon Horizon gives each project an *out-of-tree* git, so an in-tree ``.git``
@@ -437,6 +438,11 @@ def neutralize_nested_git(work_tree: Path) -> str | None:
     nested repo aside (it is then covered by the ``.git.disabled/`` exclude) makes
     the ledger store the actual files. Returns the new path if it renamed, else
     ``None``. Idempotent; never deletes data (skips if ``.git.disabled`` exists)."""
+    if workspace_root is not None and work_tree.resolve() == workspace_root.resolve():
+        from archon_horizon.log import log
+        if user_repo_git_dir(workspace_root) is not None:
+            log.info("Preserving the user's root .git for the root-path project.")
+        return None
     dot = work_tree / ".git"
     if not dot.is_dir():  # absent, or a gitfile/worktree pointer — leave alone
         return None
@@ -823,7 +829,7 @@ class WorkspaceGit:
         of defense; this keeps the staged set clean before we get there.
         """
         allowed = tuple(p for p in allow if p)
-        if not allowed:
+        if not allowed or "." in allowed:
             return
         listing = self._run(
             ["diff", "--cached", "--name-only"],

@@ -1,3 +1,5 @@
+import {HomalgBadges,SourceLinks} from '../HomalgNode';
+import {overlayOf} from '../homalg';
 /**
  * BlueprintDoc — a leanblueprint-quality reading renderer for a whole blueprint.
  *
@@ -745,6 +747,7 @@ function highlightLean(raw: string): string {
 }
 
 interface Ctx {
+  homalgNodes?: Map<string,any>;
   macros: Record<string, string>;
   labels: LabelMap;
   bib: BibMap;
@@ -992,7 +995,9 @@ const BlockNode = memo(function BlockNode({ b, ctx, k }: { b: Block; ctx: Ctx; k
     'remark', 'notation', 'convention', 'example', 'conjecture', 'claim', 'fact',
     'exercise', 'note', 'proposition_',
   ].includes(b.name);
-  const isNonFormalization = isProof || isProse;
+  const homalgNode = b.meta.label ? ctx.homalgNodes?.get(b.meta.label) : undefined;
+  const authoritative = overlayOf(homalgNode);
+  const isNonFormalization = (isProof || isProse) && !authoritative;
   const labelText = ENV_LABELS[b.name] ?? (b.name[0]?.toUpperCase() + b.name.slice(1));
   const klass = `${styles.env} ${styles[`env_${b.name}`] ?? ''} ${isProof ? styles.envProof : ''}`;
   return (
@@ -1002,9 +1007,9 @@ const BlockNode = memo(function BlockNode({ b, ctx, k }: { b: Block; ctx: Ctx; k
           {labelText}{b.num ? ` ${b.num}` : ''}.
         </span>
         {b.meta.human && <span className={styles.envHuman}><Inlines nodes={parseInline(b.meta.human)} ctx={ctx} k={`${k}-h`} /></span>}
-        {!isNonFormalization && b.meta.leanok && <span className={styles.badgeOk} title="\leanok">✓ leanok</span>}
-        {!isNonFormalization && b.meta.mathlibok && <span className={styles.badgeMathlib} title="\mathlibok">ⓜ mathlib</span>}
-        {!isNonFormalization && b.meta.notready && <span className={styles.badgeNot} title="\notready">not ready</span>}
+        {!isNonFormalization && !authoritative && b.meta.leanok && <span className={styles.badgeOk} title="\leanok">✓ leanok</span>}
+        {!isNonFormalization && !authoritative && b.meta.mathlibok && <span className={styles.badgeMathlib} title="\mathlibok">ⓜ mathlib</span>}
+        {!isNonFormalization && !authoritative && b.meta.notready && <span className={styles.badgeNot} title="\notready">not ready</span>}
         {b.meta.label && ctx.onOpenInGraph && !isNonFormalization && (
           <button className={styles.graphChip} title="Show this node on the DAG page"
             onClick={() => ctx.onOpenInGraph!(b.meta.label!)}>⬡ graph</button>
@@ -1018,6 +1023,7 @@ const BlockNode = memo(function BlockNode({ b, ctx, k }: { b: Block; ctx: Ctx; k
         )}
         {!isNonFormalization && b.meta.lean.map((nm, i) => <LeanChip key={i} name={nm} ctx={ctx} />)}
       </div>
+      {homalgNode && <><HomalgBadges node={homalgNode}/><SourceLinks sources={homalgNode.sources}/></>}
       <div className={styles.envBody}>
         {b.body.map((bb, j) => <BlockNode key={j} b={bb} ctx={ctx} k={`${k}-${j}`} />)}
         <UsesChips uses={b.meta.uses} ctx={ctx} />
@@ -1029,13 +1035,14 @@ const BlockNode = memo(function BlockNode({ b, ctx, k }: { b: Block; ctx: Ctx; k
 /** Render one already-numbered chapter (this is where KaTeX runs — call it only
  *  for chapters the user has actually selected, so the page loads lazily). */
 export function ChapterView({
-  chapter, macros, labels, bib, leanSource, onNavigate, onOpenInGraph, onOpenInLean, diffSlugFor, onOpenInDiffs, leanModFor, onOpenLogs, chapterMod,
+  chapter, macros, labels, bib, leanSource, homalgNodes, onNavigate, onOpenInGraph, onOpenInLean, diffSlugFor, onOpenInDiffs, leanModFor, onOpenLogs, chapterMod,
 }: {
   chapter: NumberedChapter;
   macros: Record<string, string>;
   labels: LabelMap;
   bib?: BibMap;
   leanSource: Map<string, string>;
+  homalgNodes?: Map<string,any>;
   onNavigate?: (slug: string, anchor: string) => void;
   onOpenInGraph?: (label: string) => void;
   onOpenInLean?: (name: string) => void;
@@ -1052,6 +1059,7 @@ export function ChapterView({
       labels,
       bib: bib ?? new Map(),
       lean: leanSource,
+      homalgNodes,
       onNavigate,
       onOpenInGraph,
       onOpenInLean,
@@ -1060,7 +1068,7 @@ export function ChapterView({
       leanModFor,
       onOpenLogs,
     }),
-    [macros, labels, bib, leanSource, onNavigate, onOpenInGraph, onOpenInLean, diffSlugFor, onOpenInDiffs, leanModFor, onOpenLogs],
+    [macros, labels, bib, leanSource, homalgNodes,onNavigate, onOpenInGraph, onOpenInLean, diffSlugFor, onOpenInDiffs, leanModFor, onOpenLogs],
   );
   // Progressive rendering: paint the top of the chapter immediately and stream
   // the remaining (KaTeX-heavy) blocks in over the next frames, so opening a big

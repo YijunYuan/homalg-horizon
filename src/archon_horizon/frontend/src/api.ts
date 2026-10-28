@@ -394,3 +394,9 @@ export async function syncBlueprintDags(): Promise<any> {
   });
   return parseJsonResponse<any>(res, 'blueprint sync');
 }
+
+export interface ReferencePageData {
+  slug: string; page: string; text: string; stale: boolean; sha256: string;
+  status: {status: string; reviews?: {status:string;by:string;at:string;findings?:{kind:string;where:string;note?:string;severity:string}[]}[]};
+}
+export const getReferencePage = (slug:string,page:string) => getJson<ReferencePageData>(`/api/reference-page?slug=${encodeURIComponent(slug)}&page=${encodeURIComponent(page)}`);
