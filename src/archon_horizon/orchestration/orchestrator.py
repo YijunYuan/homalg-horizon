@@ -1049,7 +1049,10 @@ class Orchestrator:
                 task.id, cancel, usage_path
             )
             start_sha = ledger.start_sha if ledger else str(self._revision_meta().get("workspace_sha") or "")
-            self._write_session_meta(session, {"start_sha": start_sha})
+            # Name the isolated checkout now: if this process dies before landing,
+            # `horizon sessions land` finds the work by this record.
+            self._write_session_meta(session, {"start_sha": start_sha,
+                                               **({"session_ledger": ledger.id} if ledger else {})})
             context = self._horizon_context(run, task, self._log_dir(session), resume_session_id,
                                             cancel, round_index=round_index, rounds_total=rounds_total)
             if ledger:

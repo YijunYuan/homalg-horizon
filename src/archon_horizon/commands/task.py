@@ -71,8 +71,23 @@ def _task_dict(task: HorizonTask) -> dict:
     }
 
 
+def _limits():
+    """Workspace health thresholds; defaults when no configuration can be read."""
+    from archon_horizon.config.loader import load_config
+    from archon_horizon.core.collection_health import health_limits
+
+    try:
+        import click
+
+        ctx = click.get_current_context(silent=True)
+        root = (ctx.find_root().obj or {}).get("root") if ctx is not None else None
+        return health_limits(load_config(root).health) if root else health_limits(None)
+    except Exception:
+        return health_limits(None)
+
+
 def _warn_tasks(tasks) -> list[str]:
-    warnings = task_health_warnings(tasks)
+    warnings = task_health_warnings(tasks, _limits())
     for warning in warnings:
         log.warn(warning)
     return warnings
@@ -80,7 +95,7 @@ def _warn_tasks(tasks) -> list[str]:
 
 def _with_task_warnings(payload: dict, tasks) -> dict:
     """Keep legacy JSON shapes when healthy; attach actionable warnings only."""
-    warnings = task_health_warnings(tasks)
+    warnings = task_health_warnings(tasks, _limits())
     return {**payload, **({"warnings": warnings} if warnings else {})}
 
 
@@ -88,7 +103,7 @@ def _with_task_warnings(payload: dict, tasks) -> dict:
 def list_tasks(ctx: typer.Context, as_json: bool = _JSON) -> None:
     """List tasks."""
     tasks = _store(ctx).list()
-    warnings = task_health_warnings(tasks)
+    warnings = task_health_warnings(tasks, _limits())
     if as_json:
         emit_json({"tasks": [_task_dict(t) for t in tasks], "warnings": warnings})
         return

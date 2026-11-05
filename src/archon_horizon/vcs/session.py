@@ -16,6 +16,7 @@ except ImportError:  # Isolated concurrent mode requires POSIX advisory locks.
     fcntl = None
 import hashlib
 import os
+import re
 from pathlib import Path, PurePosixPath
 import shutil
 import subprocess
@@ -343,6 +344,41 @@ class SessionLedger:
                 raise
         self.landed = True
         return self.start_sha, self.end_sha, paths
+
+    @classmethod
+    def reopen(
+        cls, workspace: Workspace, task: HorizonTask, checkout_id: str, start_sha: str
+    ) -> "SessionLedger":
+        """Reattach a preserved checkout whose session was interrupted before landing."""
+        if not re.fullmatch(r"[0-9a-f]{32}", checkout_id):
+            raise SessionConflict(f"invalid session checkout id: {checkout_id!r}")
+        if not re.fullmatch(r"[0-9a-f]{40,64}", start_sha or ""):
+            raise SessionConflict("a recorded start commit is required to land a session")
+        ledger = cls(workspace, task)
+        ledger.id = checkout_id
+        ledger.path = ledger.main.state_path / "session-worktrees" / checkout_id
+        if not (ledger.path / ledger.main.state_dir / "vcs/workspace.git").is_dir():
+            raise SessionConflict(f"no preserved session checkout {checkout_id}")
+        own = WorkspaceGit(ledger.path)
+        if own._run(["merge-base", start_sha, "HEAD"], check=False) != start_sha:
+            raise SessionConflict("the checkout does not descend from the session start")
+        ledger.start_sha = start_sha
+        ledger.workspace = dataclasses.replace(
+            ledger.main,
+            root=ledger.path,
+            metadata={**ledger.main.metadata, "canonical_root": str(ledger.main.root)},
+        )
+        return ledger
+
+    def changed_files(self) -> tuple[str, ...]:
+        """Paths this checkout changed since its start, committed or not."""
+        git = WorkspaceGit(self.path)
+        names: set[str] = set()
+        for command in (["diff", "--name-only", "--no-renames", self.start_sha, "HEAD"],
+                        ["diff", "--name-only", "--no-renames", "HEAD"],
+                        ["ls-files", "--others", "--exclude-standard"]):
+            names.update(filter(None, git._run(command).splitlines()))
+        return tuple(sorted(name for name in names if not name.startswith("build/")))
 
     @property
     def evidence_path(self) -> Path:

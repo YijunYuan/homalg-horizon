@@ -8,8 +8,8 @@ is intentional.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 
 from .clock import utc_now
@@ -32,6 +32,23 @@ class AdvisoryHealthLimits:
 
 
 DEFAULT_HEALTH_LIMITS = AdvisoryHealthLimits()
+
+
+def health_limits(overrides: Mapping[str, object] | None) -> AdvisoryHealthLimits:
+    """Workspace overrides (``workspace.health``) on top of the defaults.
+
+    A workspace whose planner keeps an intentionally long queue raises
+    ``open_tasks`` so the warning keeps meaning "something accumulated".
+    """
+    if not overrides:
+        return DEFAULT_HEALTH_LIMITS
+    known = {name for name in AdvisoryHealthLimits.__dataclass_fields__}
+    values = {
+        name: int(value)
+        for name, value in overrides.items()
+        if name in known and isinstance(value, int) and value > 0
+    }
+    return replace(DEFAULT_HEALTH_LIMITS, **values)
 
 
 def _as_utc(value: datetime) -> datetime:

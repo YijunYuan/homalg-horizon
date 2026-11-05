@@ -285,13 +285,11 @@ hygiene. A one-session task may skip the
 periodic checkpoint, and a fresh-context review before a terminal `done` claim
 is a useful confidence check when the scope warrants it.
 
-Consider upkeep even when the last command did not print a warning. On a
-multi-session run, the optional recommendation to dispatch **`janitor` at the
-start of every second Horizon session** and before the final report applies; on a
-one-session task, consider dispatching it once before claiming completion if the
-run touched roadmap, task, or inbox state. Record the checkpoint in the report
-and join its report before the final report; continue independent mathematical
-work while the helper runs.
+Dispatch **`janitor`** for a concrete hygiene problem: a stale running item, a
+status mismatch, an inbox or roadmap that has become hard to read, or a warning
+your own change caused. Do not dispatch it routinely at session start or before a
+completion claim. Continue independent mathematical work while the helper runs and
+join its report before the final report.
 If `janitor` is unavailable, ask **`ground`** for the same hygiene inspection;
 Ground is read-only, so apply or explicitly record its findings yourself.
 
@@ -307,9 +305,10 @@ survives your session should be one you *chose* to leave, with a trace saying
 why.
 
 Collection-health warnings are a dispatch trigger for operational hygiene, not
-background noise. When `inbox`, `roadmap`, or `task` reports an overloaded queue,
-stale running item, or status mismatch, dispatch **`janitor`** with the workspace
-scope (or use the `ground` fallback). Pause only work whose safety or correctness
+background noise. When `inbox`, `roadmap`, or `task` reports a stale running item,
+a status mismatch, or a queue that grew beyond its workspace threshold
+(`workspace.health`), dispatch **`janitor`** with the workspace scope (or use the
+`ground` fallback). A planner-generated queue within its threshold is intentional. Pause only work whose safety or correctness
 depends on that warning; continue unaffected mathematics while the helper runs.
 Reconcile its report, rerun the command, and record any warning that remains
 intentionally. Do this at most once for the same warning in a session; a

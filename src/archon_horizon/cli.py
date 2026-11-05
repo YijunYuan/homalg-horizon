@@ -34,6 +34,7 @@ from archon_horizon.commands import ps as ps_cmd
 from archon_horizon.commands import roadmap as roadmap_cmd
 from archon_horizon.commands import run as run_cmd
 from archon_horizon.commands import search as search_cmd
+from archon_horizon.commands import sessions as sessions_cmd
 from archon_horizon.commands import task as task_cmd
 from archon_horizon.commands import subagent as subagent_cmd
 from archon_horizon.commands import setup as setup_cmd
@@ -158,6 +159,7 @@ app.add_typer(freeze_cmd.app, name="freeze")
 app.add_typer(skills_cmd.app, name="skills")
 app.add_typer(attempt_cmd.app, name="attempt")
 app.add_typer(ledger_cmd.app, name="ledger")
+app.add_typer(sessions_cmd.app, name="sessions")
 app.command("blueprint")(blueprint_cmd.blueprint)
 app.command(
     "graph",

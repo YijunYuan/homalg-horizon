@@ -219,6 +219,15 @@ can select another HomAlg fork. Tags must be `vMAJOR.MINOR.PATCH-homalg.N`; an a
 from a different repository or branch is refused. `ARCHON_HORIZON_NO_VERSION_CHECK=1`
 disables all background version fetches. Updates are never attempted by normal tests.
 
+## Throughput settings
+
+`workspace.health` overrides the collection-health warning thresholds, for example
+`health: {open_tasks: 400}` for a planner that keeps a long pipeline queue on
+purpose; a queue within its threshold no longer prompts routine janitor runs. The
+per-session closing `honesty-reviewer` rule applies to new certificates, proof
+(`\leanok`) claims and repeated frontiers; a task whose own gate includes
+independent review needs no extra closing audit.
+
 ## Optional concurrent sessions (M7-T6)
 
 The reliable default is one run per workspace. An OS run-policy lock enforces this,
@@ -280,6 +289,17 @@ and mode in the canonical worktree. A changed parent file causes the entire land
 to be refused; the source checkout remains available at the recovery path recorded
 in session metadata and the human inbox. No conflicting parent edit is overwritten.
 Successful checkouts are removed after their audit interval has been retained.
+
+A session records its checkout id (`session_ledger`) in its metadata when it
+starts. If the run process dies before landing, `horizon sessions list` shows the
+preserved checkout and `horizon sessions land ID` finishes the missed boundary
+steps on an idle workspace (it holds the run-policy lock exclusively): the
+conflict-checked landing, skipped when it already happened, then the
+`after_session` hooks. A task left `running` returns to `queued` before the hooks;
+recovery never records a terminal status. Sessions from before this record are
+matched by evidence, never guessed: an unfinished session with the same start
+commit whose task write set covers every changed file. Otherwise pass
+`--session RUN/SESSION`. Changes outside the task scope refuse the landing.
 
 Scope rollback restores only this session's paths. Its hook retry receives a
 corrected isolated audit tree, not the global ledger HEAD, which might already

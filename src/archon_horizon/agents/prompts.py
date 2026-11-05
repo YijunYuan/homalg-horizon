@@ -92,8 +92,8 @@ def horizon_task_prompt(context: HorizonContext) -> str:
         f"{_task_block(context)}\n\n"
         "This is a headless, one-shot session: advance the REAL objective, commit each\n"
         "verified unit and any final edits, keep operational comments to the delta.\n"
-        "Before the final report, for any new certificate/context wrapper,\n"
-        "`\\leanok`/completion claim, or repeated frontier, run `honesty-reviewer`;\n"
+        "Before the final report, for any new certificate/context wrapper, proof\n"
+        "(`\\leanok`) claim, or repeated frontier, run `honesty-reviewer`;\n"
         "if unavailable, state why it was skipped.\n"
         "Then write the skill's brief final report."
     )
