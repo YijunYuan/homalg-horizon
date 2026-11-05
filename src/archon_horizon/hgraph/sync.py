@@ -26,6 +26,7 @@ the string the Lean node is keyed on, so ``sync`` needs no cross-reference index
 from __future__ import annotations
 
 import re
+import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
@@ -810,7 +811,9 @@ def sync(g: Graph, *, blueprint: str | None = None, lean_paths=(),
     # `_upsert` (graph writes) stays sequential below.
     lean_files = _iter_lean_files(lean_paths)
     if len(lean_files) >= _PARALLEL_THRESHOLD:
-        with ProcessPoolExecutor() as ex:
+        # ``spawn``, never ``fork``: concurrent lanes call this from a multithreaded
+        # process, and a forked child inherits locks other threads hold, deadlocking.
+        with ProcessPoolExecutor(mp_context=multiprocessing.get_context("spawn")) as ex:
             parsed = list(ex.map(_read_and_parse_lean,
                                  ((f, root_abs) for f in lean_files)))
     else:

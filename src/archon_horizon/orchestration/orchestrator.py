@@ -16,6 +16,7 @@ import subprocess
 import threading
 import uuid
 from collections.abc import Sequence
+from typing import TYPE_CHECKING
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -49,6 +50,9 @@ from archon_horizon.vcs.integration import (
 )
 
 from .scheduler import Scheduler
+
+if TYPE_CHECKING:
+    from .lanes import LaneCoordinator
 from .sync import SyncCoordinator
 
 
@@ -417,6 +421,10 @@ class Orchestrator:
     _open_system: "SessionLog | None" = field(default=None, repr=False)
     _open_system_events: list[TranscriptEvent] = field(default_factory=list, repr=False)
     _stop_reason: str | None = field(default=None, repr=False)
+    # Set by ``horizon run --lanes N``: this run is one lane pulling from a shared
+    # queue through the coordinator instead of selecting tasks on its own.
+    lanes: "LaneCoordinator | None" = field(default=None, repr=False)
+    lane_id: int = 0
 
     # ── event helper ────────────────────────────────────────────────
 
@@ -934,6 +942,15 @@ class Orchestrator:
     def _horizon_step(self, run: RunRecord, task: HorizonTask, runlog: RunLog | None, **kwargs):
         if not self.workspace.session_ledger:
             return self._horizon_step_inner(run, task, runlog, **kwargs)
+        if self.lanes is not None:
+            from .lanes import exclusive_reason
+            reason = exclusive_reason(task)
+            if reason is not None:
+                # The coordinator started this task only with every other lane idle
+                # and admits nothing else until it returns, so the canonical
+                # workspace is this session's alone, exactly as in serial mode.
+                self._emit("session.exclusive", task_id=task.id, reason=reason)
+                return self._horizon_step_inner(run, task, runlog, **kwargs)
         from archon_horizon.vcs.session import SessionConflict, SessionLedger
         from .hooks import hook_issue
         ledger = SessionLedger(self.workspace, task)
@@ -1152,13 +1169,15 @@ class Orchestrator:
                         hook_issue(self.workspace, f"Session integration refused: {task.id}",
                                    f"{exc}\nPreserved source snapshot: {ledger.path}")
             else:
-                self._integrate_session(run, session, role="horizon", round_index=round_index,
-                                        project=task.project, task_id=task.id, projects=task_projects)
-                end_sha = str(self._revision_meta().get("workspace_sha") or start_sha)
-                self._write_session_meta(session, {"start_sha": start_sha, "end_sha": end_sha})
-                self._boundary_hooks("after_session", run, task=task, session=session,
-                                     start_sha=start_sha, end_sha=end_sha)
-                final_status = self.task_store.get(task.id).status
+                from archon_horizon.vcs.session import boundary_lock
+                with boundary_lock(self.workspace):  # no-op unless isolated lanes coexist
+                    self._integrate_session(run, session, role="horizon", round_index=round_index,
+                                            project=task.project, task_id=task.id, projects=task_projects)
+                    end_sha = str(self._revision_meta().get("workspace_sha") or start_sha)
+                    self._write_session_meta(session, {"start_sha": start_sha, "end_sha": end_sha})
+                    self._boundary_hooks("after_session", run, task=task, session=session,
+                                         start_sha=start_sha, end_sha=end_sha)
+                    final_status = self.task_store.get(task.id).status
 
             finalized_task = self.task_store.get(task.id)
             session_meta = {"ended_at": utc_now().isoformat()}
@@ -1538,7 +1557,25 @@ class Orchestrator:
             if resume and i < resume_round:
                 continue  # this round finished before the interruption
 
-            if not dry_run:
+            claimed: HorizonTask | None = None
+            if self.lanes is not None and not dry_run:
+                self._queue_focus_for_round(run, initial=(i == (resume_round if resume else 0)))
+                claimed = self.lanes.claim(self, run, self.lane_id)
+                if claimed is None:
+                    reason = "lanes-stopped" if self.lanes.stopped else "no-runnable-tasks"
+                    reports.append(RoundReport(round_index=i))
+                    self._emit("run.stopped", run_id=run.id, reason=reason, round=i,
+                               lane=self.lane_id)
+                    break
+                # Snapshot and projection hooks run right before this lane's session,
+                # serialized with every other lane's landing.
+                if self._boundary_hooks("before_round", run):
+                    self.lanes.release(self, self.lane_id, started=False)
+                    self.lanes.stop("before-round-hook-failed")
+                    self._emit("run.stopped", run_id=run.id, reason="before-round-hook-failed", round=i)
+                    self._write_pause_marker(runlog, run, "before-round-hook-failed", None)
+                    break
+            elif not dry_run:
                 self._queue_focus_for_round(run, initial=(i == (resume_round if resume else 0)))
                 if self._boundary_hooks("before_round", run):
                     self._emit("run.stopped", run_id=run.id, reason="before-round-hook-failed", round=i)
@@ -1547,8 +1584,12 @@ class Orchestrator:
             # The hgraph skill reads a fresh DAG during horizon; only
             # the run's own projects need refreshing here.
             self._write_blueprint_dags(projects=self._run_scope_projects(run))
-            candidates = self.task_store.list()
-            selected = self.scheduler.select_tasks(self.workspace, run, run.focus, candidates)
+            if claimed is not None:
+                candidates = [claimed]
+                selected = [claimed]
+            else:
+                candidates = self.task_store.list()
+                selected = self.scheduler.select_tasks(self.workspace, run, run.focus, candidates)
             focus_task_ids = _focus_task_ids(run)
             # A focus pinned to a task that is not runnable (e.g. it is frozen, or
             # names nothing that exists) selects nothing. Say *why* before the run
@@ -1607,8 +1648,10 @@ class Orchestrator:
             fatal_reason: str | None = None
             retry_after: object = None
             for n, task in enumerate(selected):
-                result = self._horizon_step(
-                    run, task, runlog, round_index=base + i,
+                started = False
+                try:
+                    result = self._horizon_step(
+                        run, task, runlog, round_index=base + i,
                     # Rounds run as ``base + i`` for ``i`` in ``range(total_rounds)``,
                     # so the agent's last round is ``base + total_rounds - 1``. A
                     # resume extends ``total_rounds`` past ``rounds_requested``
@@ -1617,9 +1660,16 @@ class Orchestrator:
                     # ``rounds_requested`` would leave the agent's
                     # ``ROUND + 1 == ROUNDS`` last-round check never true on a
                     # resumed run, and it would never hand off cleanly.
-                    rounds_total=base + total_rounds,
-                    resume_session_id=h_resume if n == 0 else None,
-                )
+                        rounds_total=base + total_rounds,
+                        resume_session_id=h_resume if n == 0 else None,
+                    )
+                    started = result is not None
+                except BaseException:
+                    started = True  # never requeue a session that may have run
+                    raise
+                finally:
+                    if self.lanes is not None and claimed is not None:
+                        self.lanes.release(self, self.lane_id, started=started)
                 if result is None:
                     blocked.append(task.id)
                     continue
@@ -1653,6 +1703,8 @@ class Orchestrator:
             # own "system" session row in the Log.
             self._flush_system_session(runlog)
             if fatal_reason is not None:
+                if self.lanes is not None:
+                    self.lanes.stop(fatal_reason)
                 self._emit("run.stopped", run_id=run.id, reason=fatal_reason, round=i)
                 self._write_pause_marker(runlog, run, fatal_reason, retry_after)
                 break

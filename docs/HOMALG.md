@@ -227,10 +227,26 @@ including when `horizon run` is called directly. To enable concurrent runs, set
 the user repository must already have a committed HEAD. This mode requires POSIX
 `flock`. Conflicting scope leases are refused before an agent starts.
 
-`scheduler.max_parallel_sessions` limits the selected batch; the current run loop
-executes that batch sequentially. Raising it does not create concurrent sessions.
-Use native subagent delegation within the lead or explicitly isolated separate
-runs for actual parallel execution; keep canonical acceptance coordinated.
+`horizon run TARGETS --lanes N` creates actual concurrency: N lanes, each an
+ordinary sequential run with its own orchestrator, harness and run log, share one
+queue through an in-process coordinator (`orchestration/lanes.py`). Without
+`--lanes`, an isolated workspace runs `scheduler.max_parallel_sessions` lanes; a
+serial workspace keeps one. The coordinator claims a task under the boundary lock,
+marking it `running` before the agent starts, and skips tasks whose write sets
+overlap a task still active in any lane (an agent records `done` before its
+session lands, so a lane's task stays busy until the lane is released). The
+highest-priority runnable task wins. Tasks the isolated landing cannot carry
+(`references/`, `literature/.private/`, `taxonomy/`, workspace-wide or unscoped
+write sets) and tasks whose metadata sets `exclusive` run in the canonical
+workspace while every other lane is idle; lanes drain rather than start
+lower-priority work around a waiting exclusive task. A lane with nothing runnable
+waits while another lane is active and stops once the whole pool is idle. A fatal
+stop in one lane stops claiming in all of them; running sessions finish normally.
+A session that cannot start is returned to the queue and not offered again by the
+same pool. Code reached from the run loop must not `fork` (the hgraph parser uses
+a `spawn` process pool): a child forked from the multithreaded lane process
+inherits locks held by other lanes and deadlocks. `--resume` stays per run; a new lane pool re-queues orphaned `running`
+tasks when no run process is alive.
 
 On Linux, `horizon ps --kill <run>` captures descendants before terminating the
 parent, including children in separate process groups. It checks process start
@@ -239,8 +255,18 @@ New process markers retain the parent's start identity to reject PID reuse.
 Other platforms retain parent-only termination. Inspect interrupted hook evidence
 and remaining processes before recovery; killing a run does not finalize it.
 
-Every session gets a separate source checkout and its own `hgit` ledger under
-`.archon-horizon/session-worktrees/<id>/`. The user repository's HEAD stays untouched.
+Every isolated session gets a separate source checkout and its own `hgit` ledger
+under `.archon-horizon/session-worktrees/<id>/`. Paths are absolute even when the
+workspace was opened as `.`: Git resolves a relative `core.excludesFile` against
+its own working directory, which would let the shared mounts leak into commits.
+The checkout mounts the build cache, agent descriptors, `references` and
+`literature/.private` read-only by convention, and copies `hgraph/` and
+`blueprint/` so in-session regeneration stays local. After landing, its `build/`
+evidence (files up to 32 MiB) is archived to `build/session-evidence/<id>/` before
+the checkout is reclaimed. `workspace.session_generated` lists tracked files that
+every session regenerates, as per-segment globs (`*` never crosses `/`); they stay
+in the audit interval but never land or count as conflicts, so a boundary hook
+must regenerate them canonically. The user repository's HEAD stays untouched.
 The source snapshot includes current main-ledger work, rather than only the last
 public commit. Runtime state, the build cache and its lock remain shared. The agent
 receives `HOMALG_SESSION_MAIN_ROOT` identifying the canonical workspace and works

@@ -106,8 +106,52 @@ def _source_path(root: Path, raw: str) -> Path:
     return target
 
 
+#: Source prefixes an isolated session can neither lease nor land.
+UNSHARED_PREFIXES = ("references/", "literature/.private/", ".archon-horizon/", "taxonomy/")
+#: Evidence larger than this stays in the reclaimed checkout instead of the archive.
+EVIDENCE_LIMIT = 32 * 1024 * 1024
+
+
+def _segment_match(pattern: str, path: str) -> bool:
+    """Glob per path segment, so ``*`` never crosses a directory boundary."""
+    import fnmatch
+
+    left, right = pattern.split("/"), path.split("/")
+    return len(left) == len(right) and all(
+        fnmatch.fnmatchcase(part, glob) for glob, part in zip(left, right)
+    )
+
+
+def generated_path(workspace: Workspace, raw: str) -> bool:
+    """True for a tracked file the boundary hooks regenerate after every landing."""
+    return any(_segment_match(pattern, raw) for pattern in workspace.session_generated)
+
+
+def isolation_refusal(task: HorizonTask, root: Path | None = None) -> str | None:
+    """Why ``task`` cannot run in an isolated session checkout, without locking anything."""
+    paths = task.write_set.files
+    if task.write_set.workspace:
+        return "workspace-wide write set"
+    if not paths:
+        return "no explicit file scope"
+    for raw in paths:
+        if raw.startswith(UNSHARED_PREFIXES):
+            return f"shared or private scope: {raw}"
+        if root is not None:
+            try:
+                target = _source_path(root, raw)
+            except SessionConflict as exc:
+                return str(exc)
+            if target.is_dir() or target.is_symlink():
+                return f"directory or symlink scope: {raw}"
+    return None
+
+
 class SessionLedger:
     def __init__(self, workspace: Workspace, task: HorizonTask):
+        # Absolute paths throughout: Git resolves a relative core.excludesFile against
+        # its own cwd, so a workspace opened as "." would leak the mounts into commits.
+        workspace = dataclasses.replace(workspace, root=workspace.root.resolve())
         self.main = workspace
         self.task = task
         self.id = uuid.uuid4().hex
@@ -117,6 +161,7 @@ class SessionLedger:
         self.end_sha = ""
         self.workspace = workspace
         self.landed = False
+        self.generated: tuple[str, ...] = ()
 
     def acquire(self) -> None:
         if fcntl is None:
@@ -127,8 +172,7 @@ class SessionLedger:
         keys = {"task:" + self.task.id: fcntl.LOCK_EX}
         for raw in paths:
             target = _source_path(self.main.root, raw)
-            if (raw.startswith(("references/", "literature/.private/", ".archon-horizon/", "taxonomy/"))
-                    or target.is_dir() or target.is_symlink()):
+            if raw.startswith(UNSHARED_PREFIXES) or target.is_dir() or target.is_symlink():
                 raise SessionConflict(f"shared or external authored scope is unsupported in session_ledger: {raw}")
             for parent in PurePosixPath(raw).parents:
                 if parent.as_posix() != ".":
@@ -183,17 +227,33 @@ class SessionLedger:
                 destination = state / name
                 if not destination.exists():
                     destination.symlink_to(source.resolve(), target_is_directory=True)
-            for name in (".lake", ".claude", ".codex", "references", "hgraph", "blueprint"):
+            # Read-only shared inputs: the build cache (serialized by the shared check
+            # lock), agent descriptors and the private literature checkout. Private
+            # files never land from an isolated session; tasks that write them run
+            # alone in the canonical workspace instead.
+            for name in (".lake", ".claude", ".codex", "references", "literature/.private"):
                 source = self.main.root / name
-                if source.exists() and not (self.path / name).exists():
-                    (self.path / name).symlink_to(source.resolve(), target_is_directory=source.is_dir())
+                destination = self.path / name
+                if (source.exists() or source.is_symlink()) and not destination.exists():
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    destination.symlink_to(source.resolve(), target_is_directory=source.is_dir())
+            # Generated views are session-local copies: regenerating them here must
+            # never overwrite the canonical projection, which boundary hooks own.
+            for name in ("hgraph", "blueprint"):
+                source = self.main.root / name
+                destination = self.path / name
+                if source.is_dir() and not source.is_symlink() and not destination.exists():
+                    shutil.copytree(source, destination, symlinks=True)
             # Directory-only ignore patterns do not match our symlink mounts.
-            # Keep these private mounts out of every agent hgit commit as well.
+            # Keep these mounts and generated views out of every agent hgit commit.
             excludes = state / "vcs/session-excludes"
-            excludes.write_text("\n".join(("/.lake", "/.claude", "/.codex", "/references", "/hgraph", "/blueprint")) + "\n")
-            git._run(["config", "core.excludesFile", str(excludes)])
+            excludes.write_text("\n".join((
+                "/.lake", "/.claude", "/.codex", "/references", "/literature/.private",
+                "/hgraph", "/blueprint",
+            )) + "\n")
+            git._run(["config", "core.excludesFile", str(excludes.resolve())])
             self.workspace = dataclasses.replace(self.main, root=self.path,
-                                                 metadata={**self.main.metadata, "canonical_root": str(self.main.root)})
+                                                 metadata={**self.main.metadata, "canonical_root": str(self.main.root.resolve())})
             return self.workspace
 
     def prepare_landing(self) -> tuple[str, str, tuple[str, ...]]:
@@ -206,7 +266,12 @@ class SessionLedger:
         git.init()
         git.commit(f"session {self.task.id}: source snapshot", paths=["."])
         self.end_sha = git.current_sha() or self.start_sha
-        paths = tuple(filter(None, git._run(["diff", "--name-only", "--no-renames", self.start_sha, self.end_sha]).splitlines()))
+        changed = tuple(filter(None, git._run(["diff", "--name-only", "--no-renames", self.start_sha, self.end_sha]).splitlines()))
+        # Generated files reflect this session's tree only; every concurrent session
+        # rewrites them. They stay in the audit interval but never land: the
+        # after-session hook regenerates them from the combined canonical sources.
+        self.generated = tuple(raw for raw in changed if generated_path(self.main, raw))
+        paths = tuple(raw for raw in changed if raw not in self.generated)
         main_git = WorkspaceGit(self.main.root)
         audit_ref = f"refs/homalg-sessions/{self.id}"
         main_git._run(["fetch", "--no-tags", str(git.git_dir), f"HEAD:{audit_ref}"])
@@ -279,9 +344,33 @@ class SessionLedger:
         self.landed = True
         return self.start_sha, self.end_sha, paths
 
+    @property
+    def evidence_path(self) -> Path:
+        """Where a landed session's ``build/`` evidence is retained in the workspace."""
+        return self.main.root / "build" / "session-evidence" / self.id
+
+    def _archive_evidence(self) -> None:
+        source = self.path / "build"
+        if not source.is_dir() or source.is_symlink():
+            return
+        destination = self.evidence_path
+        for path in sorted(source.rglob("*")):
+            if path.is_symlink() or not path.is_file():
+                continue
+            if path.stat().st_size > EVIDENCE_LIMIT:
+                continue
+            target = destination / path.relative_to(source)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, target)
+
     def close(self) -> None:
         for stream in reversed(self.streams):
             stream.close()
         self.streams.clear()
         if self.landed and self.path.exists():
+            # Reports cite build/ receipts; keep them after the checkout is reclaimed.
+            try:
+                self._archive_evidence()
+            except OSError:
+                return  # keep the whole checkout rather than lose evidence
             shutil.rmtree(self.path)

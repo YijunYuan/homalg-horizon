@@ -34,6 +34,7 @@ class Workspace:
     rounds: int = 1
     hooks: dict[str, tuple[str, ...]] = field(default_factory=dict)
     session_ledger: bool = False
+    session_generated: tuple[str, ...] = ()
     projects: dict[str, Project] = field(default_factory=dict)
     metadata: Metadata = field(default_factory=dict)
 

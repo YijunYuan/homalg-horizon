@@ -141,6 +141,7 @@ def build_workspace(cfg: WorkspaceConfig, root: Path) -> Workspace:
         rounds=cfg.rounds,
         hooks=cfg.hooks,
         session_ledger=cfg.session_ledger,
+        session_generated=cfg.session_generated,
         projects=projects,
     )
 

@@ -293,6 +293,9 @@ class WorkspaceConfig:
     rounds: int = 1
     manage_gitignore: bool = True
     session_ledger: bool = False
+    # Tracked files every session regenerates (roots, derived records). Isolated
+    # sessions never land them; the boundary hooks regenerate them canonically.
+    session_generated: tuple[str, ...] = ()
     hooks: dict[str, tuple[str, ...]] = field(default_factory=dict)
     horizon_harness: str | None = None
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
@@ -316,12 +319,19 @@ class WorkspaceConfig:
             raise ConfigError("workspace.manage_gitignore must be a boolean")
         if not isinstance(ws.get("session_ledger", False), bool):
             raise ConfigError("workspace.session_ledger must be a boolean")
+        generated = ws.get("session_generated", []) or []
+        if not isinstance(generated, list) or any(
+            not isinstance(item, str) or not item.strip() or item.startswith("/") or ".." in item.split("/")
+            for item in generated
+        ):
+            raise ConfigError("workspace.session_generated must be a list of relative path patterns")
         return cls(
             name=ws["name"],
             state_dir=ws.get("state_dir", ".archon-horizon"),
             rounds=int(ws.get("rounds", 1)),
             manage_gitignore=ws.get("manage_gitignore", True),
             session_ledger=ws.get("session_ledger", False),
+            session_generated=tuple(generated),
             hooks=_workspace_hooks(ws.get("hooks", {})),
             horizon_harness=ws.get("horizon_agent", {}).get("harness"),
             scheduler=SchedulerConfig.from_raw(ws.get("scheduler", {})),

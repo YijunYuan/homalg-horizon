@@ -48,8 +48,10 @@ class RunCommand:
         dashboard: bool = True,
         dashboard_host: str = LOCAL_DASHBOARD_HOST,
         dashboard_port: int = 8765,
+        lanes: int | None = None,
     ) -> None:
         self.root = root
+        self.lanes = lanes
         self.targets = targets
         self.task = task
         self.rounds = rounds
@@ -97,6 +99,9 @@ class RunCommand:
             orch = build_orchestrator(self.root, registry=HarnessRegistry(), inbox_providers=providers)
 
             if self.resume is not None:
+                if self.lanes and self.lanes > 1:
+                    log.error("--resume continues one run; restart lanes with `horizon run '*' --lanes N`, which re-queues orphaned sessions.")
+                    raise typer.Exit(1)
                 run = self._resume_run(orch)
                 reports = orch.run(run, resume=True, rounds_override=self.rounds)
                 self._emit_reports(reports)
@@ -107,8 +112,75 @@ class RunCommand:
                 log.error("Specify what to run: `horizon run .`, `horizon run '*'`, `horizon`, task names, project names, or files (or `--supervisor` for all queued work).")
                 raise typer.Exit(1)
 
+            lanes = self._lane_count(cfg, workspace)
+            if lanes > 1 and not self.dry_run:
+                self._run_lanes(cfg, workspace, providers, lanes)
+                return
+
             reports = orch.run(self._build_run(orch, cfg.rounds), dry_run=self.dry_run)
             self._emit_reports(reports)
+            self._exit_if_paused(orch)
+
+    def _lane_count(self, cfg, workspace) -> int:
+        """Explicit ``--lanes``, else ``scheduler.max_parallel_sessions`` in isolated mode."""
+        if self.lanes is not None:
+            if self.lanes < 1:
+                raise typer.BadParameter("--lanes must be at least 1")
+            if self.lanes > 1 and not workspace.session_ledger:
+                log.error("--lanes needs `workspace.session_ledger: true` (isolated session checkouts).")
+                raise typer.Exit(1)
+            return self.lanes
+        if workspace.session_ledger:
+            return max(1, int(cfg.scheduler.max_parallel_sessions or 1))
+        return 1
+
+    def _run_lanes(self, cfg, workspace, providers, count: int) -> None:
+        """Run ``count`` sequential lanes in one process over one shared queue."""
+        from archon_horizon.orchestration.lanes import LaneCoordinator, requeue_stale_running
+
+        from .ps import live_runs
+
+        live = live_runs(workspace.state_path / "runs")
+        if live:
+            log.error("Another run is live (" + ", ".join(row["run"] for row in live)
+                      + "); stop it before starting lanes.")
+            raise typer.Exit(1)
+        coordinator = LaneCoordinator(lanes=count)
+        orchestrators = []
+        for lane in range(count):
+            orch = build_orchestrator(self.root, registry=HarnessRegistry(), inbox_providers=providers)
+            orch.lanes = coordinator
+            orch.lane_id = lane
+            orchestrators.append(orch)
+        requeued = requeue_stale_running(orchestrators[0])
+        if requeued:
+            log.warn("Re-queued orphaned running tasks: " + ", ".join(requeued))
+        records = [self._build_run(orch, cfg.rounds) for orch in orchestrators]
+        results: dict[int, object] = {}
+        errors: dict[int, BaseException] = {}
+
+        def work(lane: int) -> None:
+            try:
+                results[lane] = orchestrators[lane].run(records[lane])
+            except BaseException as exc:  # one failed lane must not strand the others
+                errors[lane] = exc
+                coordinator.stop(f"lane {lane} failed: {exc}")
+
+        log.step(f"Starting {count} lanes over one queue.")
+        threads = [threading.Thread(target=work, args=(lane,), name=f"horizon-lane-{lane}")
+                   for lane in range(count)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        for lane in range(count):
+            if lane in results:
+                self._emit_reports(results[lane])
+        for lane, exc in errors.items():
+            log.error(f"Lane {lane} failed: {exc}")
+        if errors:
+            raise typer.Exit(1)
+        for orch in orchestrators:
             self._exit_if_paused(orch)
 
     @staticmethod
@@ -863,6 +935,10 @@ def run(
         help="Bind the run dashboard to all IPv4 interfaces (equivalent to --host 0.0.0.0).",
     ),
     as_json: bool = typer.Option(False, "--json", help="Emit machine-readable JSON to stdout."),
+    lanes: int | None = typer.Option(
+        None, "--lanes",
+        help="Concurrent sessions over one shared queue (needs workspace.session_ledger). Each lane is a run with its own log; tasks that cannot run isolated run alone. Defaults to scheduler.max_parallel_sessions in isolated mode.",
+    ),
 ) -> None:
     """Run collaboration rounds.
 
@@ -892,4 +968,5 @@ def run(
         dashboard=not no_dashboard,
         dashboard_host=dashboard_host,
         dashboard_port=port,
+        lanes=lanes,
     ).run()
