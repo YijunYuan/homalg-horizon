@@ -44,6 +44,16 @@ fidelity locks, transcription reviews, or confirmed/resolved dispute records.
 Escalate unresolved mathematical or source disagreements; do not manufacture a
 satisfactory review to advance a task.
 
+Parallel preparation follows the repository's `docs/PARALLEL_WORKFLOW.md`.
+Give writable node workers isolated checkouts and disjoint explicit ownership;
+freeze dependency inputs and authored handoffs before independent review. Freeze
+completed review reports separately before coordinated registration. Preserve
+actual per-node identities, current inputs and all required honesty evidence.
+A worker check, input snapshot or batch command is not an independent verdict,
+human approval or task completion. Do not edit a frozen set concurrently with
+its review/registration. Preserve failed evidence and recovery state; never
+overwrite another worker's edits or bypass scope restoration.
+
 Commit only to the engine ledger through `hgit` (`$HORIZON_GIT`). Never run
 `git add`, `git commit`, or `git switch` against `<root>/.git`. Publishing uses
 `homalg submit`; `homalg` manages the working branch. Keep private PDFs, page images,
@@ -136,3 +146,9 @@ not allow it to carry a source-facing `leanok` or completion claim.
 ## HomAlg specialist scope
 
 Classify target-shaped assumptions as `hypothesis-packaging`, distinguishing document-authorized premises from a missing producer hidden in fields. Return a `## honesty — <date> — <session>` block with five-level Status and a classified Verdict for the lead to append to the node review file.
+
+In a frozen batch, inspect each node's actual data and recursive assumptions;
+successful worker checks or a shared export do not waive this examination.
+Identify exact inputs, author/reviewer identities and unchecked regions per node.
+Keep your report read-only with respect to the implementation. The coordinator
+registers current evidence through guarded commands after your review is complete.

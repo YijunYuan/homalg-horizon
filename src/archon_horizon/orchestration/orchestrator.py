@@ -506,7 +506,7 @@ class Orchestrator:
         self, name: str, run: RunRecord, *, task: HorizonTask | None = None,
         session: SessionLog | None = None, start_sha: str = "", end_sha: str = "",
     ) -> bool:
-        """Run configured hooks; a scope violation always requeues its task."""
+        """Run boundary checks; failures retain evidence and hold automatic dispatch."""
         from .hooks import hook_issue, restore_violations, run_hook, violation_paths
 
         values = {"task_id": task.id if task else "", "run_id": run.id,
@@ -514,6 +514,7 @@ class Orchestrator:
                   "start_sha": start_sha, "end_sha": end_sha}
         log_path = (session.path if session else self.workspace.state_path / "runs" / run.id) / "hooks.log"
         violated = False
+        failures: list[dict[str, object]] = []
         for command in self.workspace.hooks.get(name, ()):
             result = run_hook(command, self.workspace, values=values, log_path=log_path)
             self._emit("hook.completed" if result.returncode == 0 else "hook.failed",
@@ -521,6 +522,7 @@ class Orchestrator:
                        task_id=values["task_id"], session_dir=values["session_dir"])
             if result.returncode == 0:
                 continue
+            failures.append({"command": command, "returncode": result.returncode})
             if name == "after_session" and result.returncode == 4 and task is not None:
                 violated = True
                 current = self.task_store.get(task.id)
@@ -551,7 +553,60 @@ class Orchestrator:
                 continue
             hook_issue(self.workspace, f"Hook failed: {name}",
                        f"Command: {command}\nExit: {result.returncode}\n{result.stderr or result.stdout}")
-        return violated
+        if name == "after_session" and task is not None:
+            current = self.task_store.get(task.id)
+            boundary = {"state": "failed" if failures else "passed",
+                        "run_id": run.id, "session_dir": values["session_dir"],
+                        "failures": failures, "scope_violation": violated}
+            status = current.status
+            if failures and status is TaskStatus.DONE:
+                status = TaskStatus.QUEUED
+                self.task_store.append_history(task.id, {
+                    "at": utc_now().isoformat(), "actor": "system", "field": "status",
+                    "from": current.status.value, "to": status.value,
+                    "note": "Outer finalization failed; explicit recovery is required",
+                })
+                current = self.task_store.get(task.id)
+            self.task_store.put(dataclasses.replace(
+                current, status=status, updated_at=utc_now(),
+                metadata={**current.metadata, "boundary": boundary,
+                          "finalization_hold": bool(failures)},
+            ))
+            self._write_session_meta(session, {"boundary": boundary})
+            if failures:
+                self._retract_unaccepted_roadmap_completion(current)
+                self._write_session_meta(session, {
+                    "status": "scope-violation" if violated else "hook-failed",
+                })
+                self._emit("task.finalization_failed", task_id=task.id, **boundary)
+        return bool(failures)
+
+    def _retract_unaccepted_roadmap_completion(self, task: HorizonTask) -> None:
+        """Undo only a last DONE transition explicitly synced from this task."""
+        roadmap = self._load_roadmap()
+        items = []
+        changed = False
+        for item in roadmap.items:
+            history = item.metadata.get("history", [])
+            if not isinstance(history, list):
+                history = []
+            transition = next((entry for entry in reversed(history)
+                               if isinstance(entry, dict) and entry.get("field") == "status"), {})
+            if (item.id in task.roadmap_refs and item.status is RoadmapStatus.DONE
+                    and transition.get("note") == f"synced from task {task.id}"
+                    and transition.get("to") == "done"
+                    and transition.get("from") in {"active", "pending", "blocked", "rejected"}):
+                restored = RoadmapStatus(transition["from"])
+                self.roadmap_store.append_history(item.id, {
+                    "at": utc_now().isoformat(), "actor": "system", "field": "status",
+                    "from": "done", "to": restored.value,
+                    "note": f"Outer finalization failed for task {task.id}; completion withdrawn",
+                })
+                item = dataclasses.replace(item, status=restored)
+                changed = True
+            items.append(item)
+        if changed:
+            self.roadmap_store.save(dataclasses.replace(roadmap, items=tuple(items), updated_at=utc_now()))
 
     @staticmethod
     def _agent_harness_metadata(agent: object) -> dict[str, object]:
@@ -704,9 +759,10 @@ class Orchestrator:
         re-queue. Dispatch records the transition to ``RUNNING`` immediately before
         the agent starts.
 
-        Only the explicit focus is re-queued — unfocused queued work still runs
-        once and then rests. Frozen tasks are left alone (the scheduler and the
-        pre-dispatch freeze check handle them)."""
+        Explicit starts/resumes may retry blocked or failed work once. Subsequent
+        rounds preserve those decisions until new evidence causes an explicit
+        requeue. Cancelled and done work always require an explicit requeue.
+        Frozen tasks are left alone."""
         for task_id in _focus_task_ids(run):
             try:
                 task = self.task_store.get(task_id)
@@ -714,6 +770,10 @@ class Orchestrator:
                 continue
             if frozen_violations(task.write_set, self.freeze):
                 continue
+            if initial and task.status not in {TaskStatus.DONE, TaskStatus.CANCELLED}:
+                if task.metadata.get("finalization_hold"):
+                    task = dataclasses.replace(task, metadata={**task.metadata, "finalization_hold": False})
+                    self.task_store.put(task)
             if task.status is TaskStatus.RUNNING and initial:
                 self.task_store.append_history(task_id, {
                     "at": utc_now().isoformat(),
@@ -724,11 +784,11 @@ class Orchestrator:
                     "note": "queued so the explicitly started task can be dispatched by this run",
                 })
                 self.task_store.put(dataclasses.replace(task, status=TaskStatus.QUEUED, updated_at=utc_now()))
-            elif task.status is not TaskStatus.RUNNING and task.status is not TaskStatus.QUEUED:
+            elif initial and task.status not in {TaskStatus.RUNNING, TaskStatus.QUEUED}:
                 # A DONE the agent declared is authoritative and terminal: never
                 # reopen it here. Re-running a finished task is a deliberate human
                 # act (`horizon task set <id> --status queued`), guarded at the CLI.
-                if task.status is TaskStatus.DONE:
+                if task.status in {TaskStatus.DONE, TaskStatus.CANCELLED}:
                     continue
                 self.task_store.append_history(task_id, {
                     "at": utc_now().isoformat(),
@@ -736,8 +796,7 @@ class Orchestrator:
                     "field": "status",
                     "from": task.status.value,
                     "to": TaskStatus.QUEUED.value,
-                    "note": "queued because the user explicitly started this task" if initial
-                    else "re-queued for the next round of a focused run",
+                    "note": "queued because the user explicitly started or resumed this task",
                 })
                 self.task_store.put(dataclasses.replace(task, status=TaskStatus.QUEUED, updated_at=utc_now()))
 
@@ -745,8 +804,8 @@ class Orchestrator:
         """True when a focused run's whole milestone is finished — every focused
         task has reached ``DONE``. Lets a focused ``run`` stop as soon as the work
         it was launched for is complete instead of reworking it across the
-        remaining requested rounds. A FAILED/BLOCKED task is *not* complete, so
-        those still retry (status stays metadata, not a freeze)."""
+        remaining requested rounds. A failed or blocked task is not complete,
+        but it needs an explicit retry instead of being relaunched every round."""
         focus_task_ids = _focus_task_ids(run)
         if not focus_task_ids:
             return False
@@ -943,7 +1002,10 @@ class Orchestrator:
                     "to": TaskStatus.RUNNING.value,
                     "note": "started by Horizon run",
                 })
-            self.task_store.put(dataclasses.replace(current_task, status=TaskStatus.RUNNING, updated_at=utc_now()))
+            self.task_store.put(dataclasses.replace(
+                current_task, status=TaskStatus.RUNNING, updated_at=utc_now(),
+                metadata={**current_task.metadata, "boundary": {"state": "pending", "run_id": run.id}},
+            ))
             self._finalize_system_session()  # close any open system session before Horizon runs
             self._emit("task.started", actor="horizon", task_id=task.id)
 
@@ -1038,7 +1100,7 @@ class Orchestrator:
                         "note": "Horizon session ended without the agent recording a terminal status; returned to queued",
                     })
                 self.task_store.put(dataclasses.replace(current_task, status=final_status, updated_at=utc_now()))
-            self._emit("task.finished", actor="horizon", task_id=task.id, status=final_status)
+            self._emit("task.agent_finished", actor="horizon", task_id=task.id, status=final_status)
             if session is not None:
                 self._write_session_meta(session, {
                     "role": "horizon",
@@ -1046,9 +1108,9 @@ class Orchestrator:
                     "project": task.project,
                     "task_id": task.id,
                     "projects": list(task_projects),
-                    "status": final_status.value,
+                    "status": "finalizing",
+                    "agent_status": final_status.value,
                     "started_at": started.isoformat(),
-                    "ended_at": utc_now().isoformat(),
                     "harness_name": result.metadata.get("harness_name"),
                     "harness_kind": result.metadata.get("harness_kind"),
                     "model": result.metadata.get("model"),
@@ -1069,12 +1131,9 @@ class Orchestrator:
                         self._emit("workspace.session.integrated", run_id=run.id,
                                    task_id=task.id, session=session.name if session else ledger.id,
                                    files=list(files), workspace_commit=self._revision_meta().get("workspace_sha"))
-                        violated = self._boundary_hooks("after_session", run, task=task, session=session,
-                                                       start_sha=start_sha, end_sha=end_sha)
-                        if violated:
-                            final_status = TaskStatus.QUEUED
-                        else:
-                            final_status = self.task_store.get(task.id).status
+                        self._boundary_hooks("after_session", run, task=task, session=session,
+                                             start_sha=start_sha, end_sha=end_sha)
+                        final_status = self.task_store.get(task.id).status
                     except (SessionConflict, OSError, RuntimeError, subprocess.SubprocessError) as exc:
                         final_status = TaskStatus.QUEUED
                         current = self.task_store.get(task.id)
@@ -1082,8 +1141,14 @@ class Orchestrator:
                             "at": utc_now().isoformat(), "actor": "system", "field": "status",
                             "from": current.status.value, "to": "queued", "note": str(exc),
                         })
-                        self.task_store.put(dataclasses.replace(current, status=final_status, updated_at=utc_now()))
+                        self.task_store.put(dataclasses.replace(
+                            current, status=final_status, updated_at=utc_now(),
+                            metadata={**current.metadata, "finalization_hold": True,
+                                      "boundary": {"state": "failed", "reason": "integration-conflict",
+                                                   "recovery_path": str(ledger.path), "run_id": run.id}},
+                        ))
                         self._write_session_meta(session, {"status": "integration-conflict", "recovery_path": str(ledger.path)})
+                        self._retract_unaccepted_roadmap_completion(current)
                         hook_issue(self.workspace, f"Session integration refused: {task.id}",
                                    f"{exc}\nPreserved source snapshot: {ledger.path}")
             else:
@@ -1091,11 +1156,17 @@ class Orchestrator:
                                         project=task.project, task_id=task.id, projects=task_projects)
                 end_sha = str(self._revision_meta().get("workspace_sha") or start_sha)
                 self._write_session_meta(session, {"start_sha": start_sha, "end_sha": end_sha})
-                if self._boundary_hooks("after_session", run, task=task, session=session,
-                                        start_sha=start_sha, end_sha=end_sha):
-                    final_status = TaskStatus.QUEUED
-                else:
-                    final_status = self.task_store.get(task.id).status
+                self._boundary_hooks("after_session", run, task=task, session=session,
+                                     start_sha=start_sha, end_sha=end_sha)
+                final_status = self.task_store.get(task.id).status
+
+            finalized_task = self.task_store.get(task.id)
+            session_meta = {"ended_at": utc_now().isoformat()}
+            if not finalized_task.metadata.get("finalization_hold"):
+                session_meta["status"] = final_status.value
+            self._write_session_meta(session, session_meta)
+            self._emit("task.finished", actor="horizon", task_id=task.id, status=final_status,
+                       boundary=finalized_task.metadata.get("boundary", {}))
 
             boundary = (
                 SyncBoundary.ON_BUILD_FAILURE
@@ -1468,8 +1539,11 @@ class Orchestrator:
                 continue  # this round finished before the interruption
 
             if not dry_run:
-                self._queue_focus_for_round(run, initial=(not resume and i == 0))
-                self._boundary_hooks("before_round", run)
+                self._queue_focus_for_round(run, initial=(i == (resume_round if resume else 0)))
+                if self._boundary_hooks("before_round", run):
+                    self._emit("run.stopped", run_id=run.id, reason="before-round-hook-failed", round=i)
+                    self._write_pause_marker(runlog, run, "before-round-hook-failed", None)
+                    break
             # The hgraph skill reads a fresh DAG during horizon; only
             # the run's own projects need refreshing here.
             self._write_blueprint_dags(projects=self._run_scope_projects(run))
@@ -1492,6 +1566,10 @@ class Orchestrator:
                         blockers[tid] = task_blockers
                     elif task.status is not TaskStatus.QUEUED:
                         skipped[tid] = task.status.value
+                    elif task.metadata.get("finalization_hold"):
+                        skipped[tid] = "finalization-failed: explicit recovery required"
+                    elif task.metadata.get("dispatch_hold"):
+                        skipped[tid] = f"dispatch-held: {task.metadata['dispatch_hold']}"
                     else:
                         skipped[tid] = "not-runnable"
                 self._emit(
@@ -1546,6 +1624,8 @@ class Orchestrator:
                     blocked.append(task.id)
                     continue
                 ran.append(task.id)
+                if self.task_store.get(task.id).metadata.get("finalization_hold"):
+                    blocked.append(task.id)
                 last_result = result
                 usage = result.metadata.get("usage")
                 if isinstance(usage, dict):

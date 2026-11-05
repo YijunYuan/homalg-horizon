@@ -45,6 +45,16 @@ fidelity locks, transcription reviews, or confirmed/resolved dispute records.
 Escalate unresolved mathematical or source disagreements; do not manufacture a
 satisfactory review to advance a task.
 
+Parallel preparation follows the repository's `docs/PARALLEL_WORKFLOW.md`.
+Give writable node workers isolated checkouts and disjoint explicit ownership;
+freeze dependency inputs and authored handoffs before independent review. Freeze
+completed review reports separately before coordinated registration. Preserve
+actual per-node identities, current inputs and all required honesty evidence.
+A worker check, input snapshot or batch command is not an independent verdict,
+human approval or task completion. Do not edit a frozen set concurrently with
+its review/registration. Preserve failed evidence and recovery state; never
+overwrite another worker's edits or bypass scope restoration.
+
 Commit only to the engine ledger through `hgit` (`$HORIZON_GIT`). Never run
 `git add`, `git commit`, or `git switch` against `<root>/.git`. Publishing uses
 `homalg submit`; `homalg` manages the working branch. Keep private PDFs, page images,
@@ -61,7 +71,55 @@ Never edit generated `.tex`. Create allowed Aux_/Bridge_/Cited_ nodes only throu
 `homalg new-node` and only for the parents authorized by the task.
 
 The lead may dispatch several node-writers in one session with disjoint node files.
-Do not touch another writer's files. Use `horizon check HomAlg.<K>.<LocalId>`;
-retain honest sorry obligations and add an `attempt:` node comment when unfinished.
-Return changes and evidence to the lead; independent reviewers provide fidelity
-verdicts before any lock. Completion requires the task's `homalg stage-check`.
+It dispatches all independent ready slices before waiting for results. A local
+missing prerequisite holds only its consumers; keep other assigned ready work
+moving and report the precise blocked interface.
+Each parallel writer receives an isolated draft checkout, explicit ownership and
+fixed dependency inputs. A different temporary directory inside a shared live
+source tree is not that isolation. Do not touch another writer's files or the
+canonical checkout. If the worker has its build dependencies, use
+`horizon check HomAlg.<K>.<LocalId>` in the assigned root. A source-only worker
+returns explicitly uncompiled candidates for the lead's canonical check; it must
+not start a large environment copy to imitate an existing cache. Retain honest
+sorry obligations and add an `attempt:` node comment when unfinished.
+For this isolated source-only role, return durable files without Git writes.
+Do not use the parent's inherited `hgit`/`HORIZON_GIT`: its ledger environment may
+still point at the canonical root. Collection commits the actual author's bytes.
+Any read-only Git inspection must explicitly select the worker ledger/root. If
+the worker is source-only, do not invoke Lean LSP or diagnostics on its paths:
+even a diagnostic request can bootstrap a cold Lake environment. Ask the lead
+for a warm canonical `horizon check --lean ABSOLUTE_FROZEN_CANDIDATE` when an
+early typecheck is useful. This is candidate evidence, not canonical adoption;
+fresh canonical module/export checks remain required after collection. Never
+start a cache/download job merely to satisfy the generic local-edit loop.
+Use the worker's returned `author_commands` prefix for shell tools, for example
+`homalg workspaces exec --repo /absolute/canonical WORKER -- git status --short`.
+This sets the worker cwd and clears inherited native/Git/ledger/lock routing.
+Return exact candidate inputs, actual author identity, check results and unresolved
+issues to the lead. Independent reviewers provide per-node fidelity verdicts
+before any lock; an author's delivery contains no invented reviewer report.
+The native lead requests guarded `homalg workspaces create --native --task TASK`
+under its actual active parent run/session, normally without copying a build
+cache. A source-only worker returns uncompiled candidate bytes; native-only
+`workspaces collect ID --by LEAD` stages them after scope/baseline/dependency
+checks. The lead then runs canonical checks/export and ordinary review/acceptance.
+Checked workers may use `promote --native`. Workers never collect or promote
+themselves. Promotion and batch registration belong to the serial
+canonical boundary; external callers still require an idle workspace.
+Completion requires the task's `homalg stage-check` and the real outer session
+hook, validation and evaluation; a worker check alone does not complete the task.
+Run scoped Lean checks and preserve the complete source prose, DAG, metadata and
+review requirements. Do not rerun unchanged tooling/site regressions or synthetic
+Lean smoke suites for this node task. Return after your handoff; the lead owns
+integration requests and the engine owns outer finalization.
+
+For a repository implementing the HomAlg workflow commands, the coordinator
+prepares your actual authored node subset after canonical integration:
+`homalg workflow prepare TASK --author-session ACTUAL_AUTHOR --node NODE...`
+(repeat `--node`, with a new `--out build/...` path). Read validation and pending
+review renewals, then verify the author handoff before independent review starts.
+Keep its inputs fixed during that review. Completed reports are frozen separately
+with `workflow review-snapshot`, split by real reviewer, then registered with
+`review-fidelity-batch` using the exact snapshot order and distinct actual author/
+reviewer identities. Follow the repository guide for the full syntax and final
+stage/task/outer-hook protocol; no worker check or handoff completes those gates.

@@ -12,6 +12,7 @@ import dataclasses
 import json
 import re
 import shutil
+import tempfile
 from pathlib import Path
 
 from archon_horizon.core.events import Event
@@ -137,7 +138,19 @@ class FilesystemTaskStore(TaskStore):
             task = dataclasses.replace(task, id=self.allocate_id())
         self._items_dir.mkdir(parents=True, exist_ok=True)
         stored = dataclasses.replace(task, metadata=without_comments(task.metadata))
-        self._path(task.id).write_text(self._codec.dumps(serde.to_jsonable(stored)), "utf-8")
+        # Status watchers and CLI writers can overlap even in a single run.
+        # Replace a complete snapshot so readers never observe truncated or
+        # interleaved JSON/YAML. State-transition coordination remains separate.
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self._items_dir,
+                                             prefix=".task-", suffix=".tmp", delete=False) as stream:
+                temporary = Path(stream.name)
+                stream.write(self._codec.dumps(serde.to_jsonable(stored)))
+            temporary.replace(self._path(task.id))
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
         return task
 
     def delete(self, task_id: str) -> None:

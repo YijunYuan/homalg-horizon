@@ -541,6 +541,41 @@ def test_service_report_returns_report_and_recommendation(tmp_path: Path) -> Non
     assert payload["recommendation"] == "# Recommendation\n\nNext agent plan.\n"
 
 
+@pytest.mark.parametrize("outer_status,expected", [
+    ("finalizing", "running"), ("hook-failed", "failed"),
+    ("scope-violation", "failed"), ("integration-conflict", "failed"),
+    ("interrupted", "interrupted"),
+])
+def test_outer_finalization_overrides_successful_agent_exit(tmp_path: Path, outer_status, expected) -> None:
+    ws = _workspace(tmp_path)
+    run = RunLogTree(ws / ".archon-horizon" / "runs").allocate()
+    session = run.new_session("horizon-task")
+    session.write_meta({"role": "horizon", "status": outer_status})
+    sink = JsonlTranscriptSink(session.transcript_path)
+    sink.emit(TranscriptEvent(TranscriptKind.SESSION_END, data={"ok": True}))
+    assert WorkspaceService(ws)._compute_session_state(session)["status"] == expected
+
+
+def test_dashboard_unit_status_preserves_aggregate_and_explicit_queue_releases_hold(tmp_path: Path) -> None:
+    from archon_horizon.core.roadmap import Roadmap, RoadmapItem, RoadmapStatus
+    from archon_horizon.core.tasks import HorizonTask, TaskStatus
+
+    service = WorkspaceService(_workspace(tmp_path))
+    service.stores.roadmap.save(Roadmap(items=(
+        RoadmapItem(id="Book.STMT", title="chapter", projects=("p",), status=RoadmapStatus.ACTIVE),
+    )))
+    service.stores.tasks.put(HorizonTask(id="unit", project="p", objective="one node",
+                                       roadmap_refs=("Book.STMT",), metadata={
+                                           "roadmap_status_sync": False, "finalization_hold": True,
+                                       }))
+    service.edit_task("status", id="unit", status="done", author="human")
+    assert service.stores.roadmap.load().items[0].status is RoadmapStatus.ACTIVE
+    service.edit_task("status", id="unit", status="queued", author="human")
+    current = service.stores.tasks.get("unit")
+    assert current.status is TaskStatus.QUEUED
+    assert not current.metadata["finalization_hold"]
+
+
 def test_stale_running_session_reads_interrupted_and_surfaces_model(tmp_path: Path) -> None:
     """A session left "running" (no session_end) by a dead run shows as
     interrupted — not a perpetual spinner — once its activity is stale and no

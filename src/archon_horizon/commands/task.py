@@ -156,6 +156,8 @@ def set_task(
     if status is not None:
         new_status = TaskStatus(status.lower())
         changes["status"] = new_status
+        if new_status is TaskStatus.QUEUED and task.metadata.get("finalization_hold"):
+            changes["metadata"] = {**task.metadata, "finalization_hold": False}
         if task.status != new_status:
             store.append_history(task_id, history_entry(actor, "status",
                                  before=task.status.value, after=new_status.value))
@@ -183,6 +185,10 @@ def set_task(
 
 
 def _sync_roadmap_refs_from_task(store, task: HorizonTask, status: TaskStatus, actor: str | None) -> None:
+    # Small execution units may link a coarse milestone for ownership/display;
+    # finishing one unit must not complete the aggregate mathematical stage.
+    if task.metadata.get("roadmap_status_sync") is False:
+        return
     target = roadmap_status_for_task_status(status)
     if target is None or not task.roadmap_refs:
         return

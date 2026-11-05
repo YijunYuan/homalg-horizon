@@ -157,6 +157,26 @@ def test_hook_timeout_recorded(tmp_path, monkeypatch):
     assert "timed out" in result.stderr
 
 
+def test_outer_hook_drops_inherited_native_identity_and_stamps_its_boundary(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARCHON_HORIZON_RUN", "stale-parent-run")
+    monkeypatch.setenv("ARCHON_HORIZON_SESSION", "stale-parent-session")
+    monkeypatch.setenv("ARCHON_HORIZON_AGENT_ROLE", "horizon")
+    script = tmp_path / "inspect_env.py"
+    script.write_text('import json,os\nprint(json.dumps({k:v for k,v in os.environ.items() if k.startswith("ARCHON_HORIZON_")}))\n')
+    result = run_hook(f"{shlex.quote(sys.executable)} {shlex.quote(str(script))}",
+                      Workspace(name="test", root=tmp_path),
+                      values={"task_id": "T-current", "session_dir": "current-session"},
+                      log_path=tmp_path / "hooks.log")
+    assert result.returncode == 0
+    env = json.loads(result.stdout)
+    assert "ARCHON_HORIZON_RUN" not in env
+    assert "ARCHON_HORIZON_SESSION" not in env
+    assert "ARCHON_HORIZON_AGENT_ROLE" not in env
+    assert env["ARCHON_HORIZON_TASK"] == "T-current"
+    assert env["ARCHON_HORIZON_SESSION_DIR"] == "current-session"
+    assert env["ARCHON_HORIZON_ROOT"] == str(tmp_path)
+
+
 def test_config_rejects_malformed_hooks_and_boolean():
     for ws in ({"hooks": {"other": []}}, {"hooks": {"before_round": "rm"}}, {"manage_gitignore": "false"}):
         with pytest.raises(ConfigError):
@@ -170,19 +190,128 @@ def test_new_inbox_kinds_keep_issue_attention(tmp_path):
     assert {i.kind for i in provider.list_items()} == {InboxKind.ISSUE, InboxKind.DISPUTE, InboxKind.DOCUMENT_ERROR}
 
 
-def test_no_commit_session_has_equal_hook_shas_and_failure_keeps_running(tmp_path):
+def test_no_commit_session_has_equal_hook_shas_and_failure_holds_redispatch(tmp_path):
     script = tmp_path / "hook.py"
     script.write_text('import sys\nprint("failure output")\nraise SystemExit(7)\n')
     workspace(tmp_path, {"after_session": [f"{shlex.quote(sys.executable)} hook.py {{start_sha}} {{end_sha}}"]})
     orch = build_orchestrator(tmp_path, harnesses={"hor": NullHarness("")})
     task(orch)
-    assert len(orch.run(RunRecord(id="", focus=Focus(tasks=("T-1",)), rounds_requested=2))) == 2
+    orch.run(RunRecord(id="", focus=Focus(tasks=("T-1",)), rounds_requested=3))
     sessions = list((tmp_path / ".archon-horizon/runs/0001/sessions").glob("*horizon*"))
-    assert len(sessions) == 2
+    assert len(sessions) == 1
     for session in sessions:
         meta = json.loads((session / "meta.json").read_text())
         assert meta["start_sha"] == meta["end_sha"]
-    assert len(FilesystemInboxProvider(tmp_path / ".archon-horizon/inbox/local").list_items()) == 2
+        assert meta["status"] == "hook-failed"
+        assert meta["boundary"]["state"] == "failed"
+    assert orch.task_store.get("T-1").metadata["finalization_hold"]
+    assert len(FilesystemInboxProvider(tmp_path / ".archon-horizon/inbox/local").list_items()) == 1
+
+
+def test_failed_outer_hook_invalidates_done_and_explicit_retry_can_recover(tmp_path):
+    from archon_horizon.commands.task import _sync_roadmap_refs_from_task
+    from archon_horizon.core.roadmap import Roadmap, RoadmapItem, RoadmapStatus
+
+    script = tmp_path / "hook.py"
+    script.write_text('import pathlib\nraise SystemExit(7 if pathlib.Path("fail").exists() else 0)\n')
+    (tmp_path / "fail").touch()
+    workspace(tmp_path, {"after_session": [f"{shlex.quote(sys.executable)} hook.py"]})
+    orch = build_orchestrator(tmp_path, harnesses={"hor": NullHarness("")})
+    task(orch)
+    orch.task_store.put(dataclasses.replace(orch.task_store.get("T-1"), roadmap_refs=("linked", "prior")))
+    orch.roadmap_store.save(Roadmap(items=(
+        RoadmapItem(id="linked", title="pending acceptance", projects=("HomAlg",), status=RoadmapStatus.ACTIVE),
+        RoadmapItem(id="prior", title="earlier accepted", projects=("HomAlg",), status=RoadmapStatus.DONE),
+    )))
+    original = orch.horizon
+
+    class Completer:
+        def run_task(self, context):
+            current = orch.task_store.get(context.task.id)
+            orch.task_store.append_history(context.task.id, {
+                "actor": "horizon", "field": "status", "from": "running", "to": "done",
+            })
+            _sync_roadmap_refs_from_task(orch.roadmap_store, current, TaskStatus.DONE, "horizon")
+            orch.task_store.put(dataclasses.replace(current, status=TaskStatus.DONE))
+            return original.run_task(context)
+
+    orch.horizon = Completer()
+    orch.run(RunRecord(id="", focus=Focus(tasks=("T-1",)), rounds_requested=3))
+    current = orch.task_store.get("T-1")
+    assert current.status is TaskStatus.QUEUED
+    assert current.metadata["finalization_hold"]
+    roadmap = {item.id: item.status for item in orch.roadmap_store.load().items}
+    assert roadmap == {"linked": RoadmapStatus.ACTIVE, "prior": RoadmapStatus.DONE}
+    events = list(orch.event_log.read_all())
+    assert next(i for i, e in enumerate(events) if e.type == "hook.failed") < next(
+        i for i, e in enumerate(events) if e.type == "task.finished")
+    assert [e for e in events if e.type == "task.finished"][-1].data["status"] == "queued"
+    (tmp_path / "fail").unlink()
+    orch.run(RunRecord(id="", focus=Focus(tasks=("T-1",)), rounds_requested=2))
+    current = orch.task_store.get("T-1")
+    assert current.status is TaskStatus.DONE
+    assert not current.metadata["finalization_hold"]
+    assert current.metadata["boundary"]["state"] == "passed"
+
+
+def test_failed_before_round_hook_does_not_launch_agent(tmp_path):
+    workspace(tmp_path, {"before_round": [f'{shlex.quote(sys.executable)} -c "raise SystemExit(7)"']})
+    launched = []
+    orch = build_orchestrator(tmp_path, harnesses={"hor": NullHarness(lambda req: launched.append(req))})
+    task(orch)
+    orch.run(RunRecord(id="", focus=Focus(tasks=("T-1",)), rounds_requested=2))
+    assert not launched
+    assert any(e.type == "hook.failed" for e in orch.event_log.read_all())
+    assert orch.last_paused["reason"] == "before-round-hook-failed"
+
+
+def test_failed_task_finalization_does_not_block_independent_task(tmp_path):
+    script = tmp_path / "hook.py"
+    script.write_text('import os\nraise SystemExit(7 if os.environ["ARCHON_HORIZON_TASK"] == "T-1" else 0)\n')
+    workspace(tmp_path, {"after_session": [f"{shlex.quote(sys.executable)} hook.py"]})
+    orch = build_orchestrator(tmp_path, harnesses={"hor": NullHarness("")})
+    task(orch)
+    orch.task_store.put(dataclasses.replace(orch.task_store.get("T-1"), id="T-2"))
+    reports = orch.run(RunRecord(id="", rounds_requested=2))
+    assert [tid for report in reports for tid in report.tasks_run] == ["T-1", "T-2"]
+    assert reports[0].tasks_blocked == ("T-1",)
+    assert orch.task_store.get("T-1").metadata["finalization_hold"]
+    assert orch.task_store.get("T-2").metadata["boundary"]["state"] == "passed"
+
+
+def test_explicit_queue_clears_finalization_hold_without_erasing_failed_receipt(tmp_path):
+    from archon_horizon.cli import main
+
+    workspace(tmp_path)
+    orch = build_orchestrator(tmp_path, harnesses={"hor": NullHarness("")})
+    task(orch)
+    current = orch.task_store.get("T-1")
+    orch.task_store.put(dataclasses.replace(current, metadata={
+        "finalization_hold": True, "boundary": {"state": "failed", "session_dir": "original-session"},
+    }))
+    assert main(["--root", str(tmp_path), "task", "set", "T-1", "--status", "queued"]) == 0
+    current = orch.task_store.get("T-1")
+    assert not current.metadata["finalization_hold"]
+    assert current.metadata["boundary"]["session_dir"] == "original-session"
+
+
+def test_statement_unit_completion_does_not_complete_coarse_roadmap(tmp_path):
+    from archon_horizon.commands.task import _sync_roadmap_refs_from_task
+    from archon_horizon.core.roadmap import Roadmap, RoadmapItem, RoadmapStatus
+
+    workspace(tmp_path)
+    orch = build_orchestrator(tmp_path, harnesses={"hor": NullHarness("")})
+    task(orch)
+    orch.roadmap_store.save(Roadmap(items=(
+        RoadmapItem(id="Book.STMT", title="all statements", projects=("HomAlg",), status=RoadmapStatus.ACTIVE),
+    )))
+    unit = dataclasses.replace(orch.task_store.get("T-1"), roadmap_refs=("Book.STMT",),
+                               metadata={"roadmap_status_sync": False})
+    _sync_roadmap_refs_from_task(orch.roadmap_store, unit, TaskStatus.DONE, "horizon")
+    assert orch.roadmap_store.load().items[0].status is RoadmapStatus.ACTIVE
+    aggregate = dataclasses.replace(unit, metadata={})
+    _sync_roadmap_refs_from_task(orch.roadmap_store, aggregate, TaskStatus.DONE, "horizon")
+    assert orch.roadmap_store.load().items[0].status is RoadmapStatus.DONE
 
 
 def test_init_manage_gitignore_false_preserves_bytes(tmp_path):

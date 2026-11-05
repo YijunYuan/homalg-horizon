@@ -12,6 +12,8 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
+
 from archon_horizon.agents.harness_agents import HarnessHorizonAgent
 from archon_horizon.core.freeze import FreezeLevel, FreezeRule, FreezeSet
 from archon_horizon.core.roadmap import Roadmap, RoadmapItem, RoadmapStatus
@@ -250,6 +252,43 @@ def test_done_task_is_terminal_and_never_reopened(tmp_path: Path) -> None:
         h.get("field") == "status" and h.get("from") == "done" and h.get("to") == "queued"
         for h in history
     ), "a done task must not be silently reopened by the orchestrator"
+
+
+@pytest.mark.parametrize("status", [TaskStatus.BLOCKED, TaskStatus.FAILED, TaskStatus.CANCELLED])
+def test_explicit_terminal_result_is_not_retried_in_later_rounds(tmp_path: Path, status) -> None:
+    orch, store = _build(tmp_path, horizon_sets_status=status)
+    reports = orch.run(RunRecord(id="S-hold", focus=Focus(tasks=("R-1",)), rounds_requested=4))
+    assert [tid for report in reports for tid in report.tasks_run] == ["R-1"]
+    assert store.get("R-1").status is status
+
+
+def test_new_explicit_run_retries_blocked_task_once(tmp_path: Path) -> None:
+    orch, store = _build(tmp_path, horizon_sets_status=TaskStatus.BLOCKED)
+    orch.run(RunRecord(id="S-first", focus=Focus(tasks=("R-1",)), rounds_requested=2))
+    reports = orch.run(RunRecord(id="S-retry", focus=Focus(tasks=("R-1",)), rounds_requested=3))
+    assert [tid for report in reports for tid in report.tasks_run] == ["R-1"]
+    assert store.get("R-1").status is TaskStatus.BLOCKED
+
+
+def test_cancelled_task_needs_explicit_requeue(tmp_path: Path) -> None:
+    orch, store = _build(tmp_path)
+    store.put(dataclasses.replace(store.get("R-1"), status=TaskStatus.CANCELLED))
+    reports = orch.run(RunRecord(id="S-cancelled", focus=Focus(tasks=("R-1",)), rounds_requested=2))
+    assert not any(report.tasks_run for report in reports)
+    assert store.get("R-1").status is TaskStatus.CANCELLED
+
+
+def test_scheduler_uses_current_priority_and_skips_held_work(tmp_path: Path) -> None:
+    orch, store = _build(tmp_path)
+    base = store.get("R-1")
+    tasks = [
+        dataclasses.replace(base, id="A", priority="low", metadata={"roadmap_priority": "urgent"}),
+        dataclasses.replace(base, id="B", priority="high", metadata={"roadmap_priority": "low"}),
+        dataclasses.replace(base, id="C", priority="urgent", metadata={"dispatch_hold": "coarse barrier"}),
+        dataclasses.replace(base, id="D", priority="urgent", metadata={"finalization_hold": True}),
+    ]
+    selected = FreezeAwareScheduler().select_tasks(orch.workspace, RunRecord(id="s"), Focus(), tasks)
+    assert [task.id for task in selected] == ["B"]
 
 
 def test_user_started_running_task_history_explains_dispatch_queue(tmp_path: Path) -> None:

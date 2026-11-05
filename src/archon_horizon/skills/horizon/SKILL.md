@@ -42,6 +42,16 @@ fidelity locks, transcription reviews, or confirmed/resolved dispute records.
 Escalate unresolved mathematical or source disagreements; do not manufacture a
 satisfactory review to advance a task.
 
+Parallel preparation follows the repository's `docs/PARALLEL_WORKFLOW.md`.
+Give writable node workers isolated checkouts and disjoint explicit ownership;
+freeze dependency inputs and authored handoffs before independent review. Freeze
+completed review reports separately before coordinated registration. Preserve
+actual per-node identities, current inputs and all required honesty evidence.
+A worker check, input snapshot or batch command is not an independent verdict,
+human approval or task completion. Do not edit a frozen set concurrently with
+its review/registration. Preserve failed evidence and recovery state; never
+overwrite another worker's edits or bypass scope restoration.
+
 Commit only to the engine ledger through `hgit` (`$HORIZON_GIT`). Never run
 `git add`, `git commit`, or `git switch` against `<root>/.git`. Publishing uses
 `homalg submit`; `homalg` manages the working branch. Keep private PDFs, page images,
@@ -53,8 +63,11 @@ page transcriptions and raw run logs out of public files and remote status data.
 Think of your session as **one team**: you (the lead) plus the subagents you
 spawn as your **workers**, with the tools and skills available to you. A
 `horizon run` is your team working through its task. Other runs are **other
-teams** working in parallel on the *same shared workspace* — one Lean project set,
-one roadmap/board, one ledger, one inbox.
+teams** coordinating through the same canonical project state, roadmap/board and
+inbox. HomAlg defaults to one active run; optional native concurrent sessions use
+the source-isolation and landing contract in `docs/HOMALG.md`. Separate HomAlg
+draft workers follow the companion repository's parallel workflow guide. Shared
+coordination state is not permission for simultaneous writers in one source tree.
 
 You do not manage other teams and they do not manage you. You coordinate through
 **shared state**, not meetings:
@@ -210,9 +223,21 @@ The defense is NOT to avoid work — it is to make interruption cheap:
 ## One-shot discipline (important)
 
 This session runs to completion and is **not resumed** — you will not be re-invoked
-when a background job finishes. So **run work in the foreground and block on it**
-(builds, checks, subagents). Anything you leave running in the background, or leave
-uncommitted, may be lost when the session ends. Commit early and often (below).
+when a background job finishes. Dispatch all independent ready workers before
+joining their results. Wait when a dependent operation needs an output, and join
+every worker/check before ending the session. Independent authoring and review
+can continue while another result is pending. Anything left running or
+uncommitted may be lost when the session ends. Commit early and often (below).
+
+For HomAlg mathematical tasks, use current scoped checks, required fresh exports,
+independent fidelity review and the exact stage check, then return control for
+the engine-owned outer hook. Do not manually run `homalg after-session` or add an
+extra `homalg plan --advance`. Full `make test`, `make validate` and `make site`
+regressions are required for tooling/schema/site changes, not each source/Lean
+task using unchanged tooling. Source Statement/Proof prose, DAG annotations,
+comments, metadata, generated-data and blueprint freshness, mathematical review
+and final validation retain their full requirements even with formal proofs
+deferred. Record actual checks and any coverage limits.
 
 ## Pick the highest-value work
 
@@ -265,7 +290,8 @@ multi-session run, the optional recommendation to dispatch **`janitor` at the
 start of every second Horizon session** and before the final report applies; on a
 one-session task, consider dispatching it once before claiming completion if the
 run touched roadmap, task, or inbox state. Record the checkpoint in the report
-and wait for a helper you chose before continuing.
+and join its report before the final report; continue independent mathematical
+work while the helper runs.
 If `janitor` is unavailable, ask **`ground`** for the same hygiene inspection;
 Ground is read-only, so apply or explicitly record its findings yourself.
 
@@ -282,10 +308,10 @@ why.
 
 Collection-health warnings are a dispatch trigger for operational hygiene, not
 background noise. When `inbox`, `roadmap`, or `task` reports an overloaded queue,
-stale running item, or status mismatch, pause the proof loop and dispatch
-**`janitor`** with the workspace scope (or use the `ground` fallback). Wait for
-the chosen helper,
-reconcile its report, rerun the command, and record any warning that remains
+stale running item, or status mismatch, dispatch **`janitor`** with the workspace
+scope (or use the `ground` fallback). Pause only work whose safety or correctness
+depends on that warning; continue unaffected mathematics while the helper runs.
+Reconcile its report, rerun the command, and record any warning that remains
 intentionally. Do this at most once for the same warning in a session; a
 persistent warning still needs a report or inbox issue rather than repeated
 no-op calls. This targeted health response is separate from optional semantic

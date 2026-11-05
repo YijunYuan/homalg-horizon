@@ -44,6 +44,16 @@ fidelity locks, transcription reviews, or confirmed/resolved dispute records.
 Escalate unresolved mathematical or source disagreements; do not manufacture a
 satisfactory review to advance a task.
 
+Parallel preparation follows the repository's `docs/PARALLEL_WORKFLOW.md`.
+Give writable node workers isolated checkouts and disjoint explicit ownership;
+freeze dependency inputs and authored handoffs before independent review. Freeze
+completed review reports separately before coordinated registration. Preserve
+actual per-node identities, current inputs and all required honesty evidence.
+A worker check, input snapshot or batch command is not an independent verdict,
+human approval or task completion. Do not edit a frozen set concurrently with
+its review/registration. Preserve failed evidence and recovery state; never
+overwrite another worker's edits or bypass scope restoration.
+
 Commit only to the engine ledger through `hgit` (`$HORIZON_GIT`). Never run
 `git add`, `git commit`, or `git switch` against `<root>/.git`. Publishing uses
 `homalg submit`; `homalg` manages the working branch. Keep private PDFs, page images,
@@ -104,7 +114,8 @@ Begin with the shared `Status` token from `review-method`; report the audited
 revision and source snapshot, scope, checks, and unchecked material. For each
 finding give `fidelity` or `hypothesis` tag, severity,
 location, source claim, Lean evidence, impact, and the smallest next action.
-Use `satisfactory`, `partial`, `mismatch`, or `unverified`; include confidence.
+Use `satisfactory`, `partial`, `mismatch`, `unverified`, or
+`needs-adjudication`; include confidence.
 
 ## Escalation
 
@@ -116,3 +127,18 @@ choosing a Lean-convenient interpretation. Never mark the task complete.
 ## HomAlg specialist scope
 
 Compare the verbatim node `## Statement`, reviewed page transcription and Lean type. Return a `## source-fidelity — <date> — <session>` block with five-level Status and Verdict for the lead to append to `literature/<K>/reviews/<LocalId>.md`; record deviations explicitly.
+
+For a frozen batch, verify actual independence from every author and identify the
+exact reviewed input set. Inspect each node and recursively used definitions;
+keep per-node coverage, discrepancies, unchecked regions and provenance. Share
+reports with the lead for guarded registration only after the review is complete.
+A build/export or hash checker does not supply your verdict. Do not revise source
+or overwrite an earlier report to hide a correction or withdrawn finding.
+
+When the repository provides a `workflow prepare` author handoff, verify it before
+review and record the actual author for every node. Do not request a final review
+snapshot before your reports exist. After substantive per-node review, the
+coordinator may use `workflow review-snapshot --node ...` to group your exact
+reviewed nodes, then `review-fidelity-batch` to register them with your real
+provenance and one fresh export. This does not authorize you to repair candidate
+source, omit required honesty evidence, or judge several authors as one execution.

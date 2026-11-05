@@ -61,6 +61,15 @@ For a conversational, human-facing session — explain status, summarize recent 
 
 Run lifecycle and resumption state are tracked in [`core/sessions.py`](../../src/archon_horizon/core/sessions.py); concurrency safety across projects is handled by [`orchestration/locks.py`](../../src/archon_horizon/orchestration/locks.py).
 
+The current supervisor executes its selected tasks sequentially. The scheduler's
+`max_parallel_sessions` setting limits selection per round, not simultaneous
+execution. Native subagents can work concurrently within one lead session; the
+HomAlg fork additionally supports isolated concurrent runs under the explicit
+[session-ledger contract](../HOMALG.md#optional-concurrent-sessions-m7-t6).
+Blocked and failed results remain stopped within the current run. Retry them
+through an explicit new start/resume after addressing the blocker; cancelled
+tasks require an explicit requeue.
+
 ---
 
 ## 2. Collaboration Rounds

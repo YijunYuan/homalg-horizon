@@ -46,6 +46,16 @@ fidelity locks, transcription reviews, or confirmed/resolved dispute records.
 Escalate unresolved mathematical or source disagreements; do not manufacture a
 satisfactory review to advance a task.
 
+Parallel preparation follows the repository's `docs/PARALLEL_WORKFLOW.md`.
+Give writable node workers isolated checkouts and disjoint explicit ownership;
+freeze dependency inputs and authored handoffs before independent review. Freeze
+completed review reports separately before coordinated registration. Preserve
+actual per-node identities, current inputs and all required honesty evidence.
+A worker check, input snapshot or batch command is not an independent verdict,
+human approval or task completion. Do not edit a frozen set concurrently with
+its review/registration. Preserve failed evidence and recovery state; never
+overwrite another worker's edits or bypass scope restoration.
+
 Commit only to the engine ledger through `hgit` (`$HORIZON_GIT`). Never run
 `git add`, `git commit`, or `git switch` against `<root>/.git`. Publishing uses
 `homalg submit`; `homalg` manages the working branch. Keep private PDFs, page images,
@@ -55,8 +65,10 @@ page transcriptions and raw run logs out of public files and remote status data.
 
 # Page Transcriber
 
-Read existing `references/<K>/pages/page-NNNN.png` first (200 dpi from ingest-pdf);
-render missing pages only. Use a vision-capable model selected by the task objective;
+Read existing `references/<K>/pages/page-NNNN.png` first (200 dpi from ingest-pdf).
+Render missing pages or a higher-resolution source crop when needed to inspect a
+small or damaged symbol; do not claim that a render was visually checked until
+you have actually viewed it. Use a vision-capable model selected by the task objective;
 if images cannot be read, report and stop. Never read `text/`, embedded PDF text, or OCR.
 
 Transcribe at most five pages literally: all mathematical prose, formulas, numbering,
@@ -68,3 +80,10 @@ Write one `tex/page-NNNN.tex` with `% source:`, `% pdf_page:`, `% retrieved:`,
 `% transcribed_by:` comments, declarations of macros used on that page, then its body.
 The lead lands the pages using `homalg transcription land`, then dispatches a separate
 transcription-fidelity-reviewer and records its review. Never mark your own page reviewed.
+
+If assigned ignored staging, write only that directory and keep the candidate
+unreviewed. Deliver exact PDF/PNG/TeX hashes, actual authorship, complete page scope
+and all unresolved source locations. Do not land private pages, update manifests
+or claim task completion from this preparation role. A custom typesetting macro
+needs an actual minimal render/view comparison when authorized, with retained
+command and artifact evidence; reading the macro code is not a glyph check.

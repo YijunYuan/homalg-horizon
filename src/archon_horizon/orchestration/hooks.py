@@ -33,8 +33,17 @@ def run_hook(command: str, workspace: Workspace, *, values: dict[str, str], log_
         argv = [part.format(**values) for part in shlex.split(command)]
         if not argv:
             raise ValueError("empty hook command")
-        env = {**os.environ, "ARCHON_HORIZON_TASK": values.get("task_id", ""),
-               "ARCHON_HORIZON_SESSION_DIR": values.get("session_dir", "")}
+        env = dict(os.environ)
+        # The outer boundary is not an agent session, even when the supervisor
+        # was launched from an interactive session's shell. Never inherit that
+        # session's identity into guarded finalization or provenance records.
+        for key in ("ARCHON_HORIZON_RUN", "ARCHON_HORIZON_SESSION",
+                    "ARCHON_HORIZON_AGENT_ROLE", "ARCHON_HORIZON_SUBAGENT",
+                    "ARCHON_HORIZON_ROUND", "ARCHON_HORIZON_ROUNDS"):
+            env.pop(key, None)
+        env.update({"ARCHON_HORIZON_ROOT": str(workspace.root),
+               "ARCHON_HORIZON_TASK": values.get("task_id", ""),
+               "ARCHON_HORIZON_SESSION_DIR": values.get("session_dir", "")})
         if workspace.session_ledger:
             env["HOMALG_BOUNDARY_LOCK_HELD"] = "1"
         completed = subprocess.run(argv, cwd=workspace.root, env=env, capture_output=True,

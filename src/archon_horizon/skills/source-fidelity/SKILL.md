@@ -42,6 +42,16 @@ fidelity locks, transcription reviews, or confirmed/resolved dispute records.
 Escalate unresolved mathematical or source disagreements; do not manufacture a
 satisfactory review to advance a task.
 
+Parallel preparation follows the repository's `docs/PARALLEL_WORKFLOW.md`.
+Give writable node workers isolated checkouts and disjoint explicit ownership;
+freeze dependency inputs and authored handoffs before independent review. Freeze
+completed review reports separately before coordinated registration. Preserve
+actual per-node identities, current inputs and all required honesty evidence.
+A worker check, input snapshot or batch command is not an independent verdict,
+human approval or task completion. Do not edit a frozen set concurrently with
+its review/registration. Preserve failed evidence and recovery state; never
+overwrite another worker's edits or bypass scope restoration.
+
 Commit only to the engine ledger through `hgit` (`$HORIZON_GIT`). Never run
 `git add`, `git commit`, or `git switch` against `<root>/.git`. Publishing uses
 `homalg submit`; `homalg` manages the working branch. Keep private PDFs, page images,
@@ -93,9 +103,17 @@ Return an append-only block for `literature/<K>/reviews/<LocalId>.md`, headed
 
 Record the source file/page actually read, the declaration type and location,
 and any bridge or missing consumer. A source anchor proves provenance, not
-semantic equality. Report `confirmed`, `partial`, `unverified`, or `no issue`
-with the reason. File a focused issue for a mismatch; do not repair a frozen
+semantic equality. The overall Status uses exactly the five HomAlg tokens;
+individual findings may be described as confirmed or no-issue with their reason.
+File a focused issue for a mismatch; do not repair a frozen
 source or blueprint while acting as an independent reviewer.
+
+For coordinated batches, identify the actual author and reviewer and the frozen
+inputs for each node. Review every selected node and its recursive definition
+boundary. A shared build/export is compilation evidence only. Completed reports
+must be bound separately from the author's earlier delivery before guarded
+registration; changing either set of inputs requires reassessment. Preserve
+superseded reports instead of changing their historical verdicts.
 
 For edge cases, pair this lens with [[semantic-adversarial]]. For `\source`,
 `\lean`, and `\leanok` attachment checks, use [[blueprint-integrity]].

@@ -42,6 +42,16 @@ fidelity locks, transcription reviews, or confirmed/resolved dispute records.
 Escalate unresolved mathematical or source disagreements; do not manufacture a
 satisfactory review to advance a task.
 
+Parallel preparation follows the repository's `docs/PARALLEL_WORKFLOW.md`.
+Give writable node workers isolated checkouts and disjoint explicit ownership;
+freeze dependency inputs and authored handoffs before independent review. Freeze
+completed review reports separately before coordinated registration. Preserve
+actual per-node identities, current inputs and all required honesty evidence.
+A worker check, input snapshot or batch command is not an independent verdict,
+human approval or task completion. Do not edit a frozen set concurrently with
+its review/registration. Preserve failed evidence and recovery state; never
+overwrite another worker's edits or bypass scope restoration.
+
 Commit only to the engine ledger through `hgit` (`$HORIZON_GIT`). Never run
 `git add`, `git commit`, or `git switch` against `<root>/.git`. Publishing uses
 `homalg submit`; `homalg` manages the working branch. Keep private PDFs, page images,
@@ -82,3 +92,11 @@ never `text/` or OCR output. Preserve footnotes and cross-page fragments.
 Give source slug, PDF/transcription paths, page index/offset, symbols checked,
 exact discrepancy or `no-issue`, impact on anchors, unchecked regions, and
 confidence. Do not edit the source or blueprint while reviewing.
+
+For an ignored staged candidate, bind the complete review to PDF, PNG and TeX
+hashes and the actual original author. Record unresolved source symbols honestly;
+do not infer them from mathematical context. Later canonical import may reuse
+this evidence only after exact input matching, genuine author/reviewer separation
+and the normal private-scope/landing/review gates. It is not itself canonical
+registration or a completed transcription task. Preserve superseded reports and
+their original hashes when a candidate changes or a finding is withdrawn.

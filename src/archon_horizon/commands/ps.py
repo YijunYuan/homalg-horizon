@@ -37,6 +37,7 @@ def write_process_marker(run_dir: Path, **context: object) -> None:
             "pid": os.getpid(),
             "host": socket.gethostname(),
             "started_at": time.time(),
+            "process_start_ticks": (_process_stat(os.getpid()) or (None, None, None))[1],
             **{key: value for key, value in context.items() if value not in (None, "", [], ())},
         }), "utf-8")
     except OSError:
@@ -108,7 +109,19 @@ def _run_context(run_dir: Path, marker: dict) -> dict[str, object]:
     return context
 
 
+def _process_stat(pid: int) -> tuple[int, int, str] | None:
+    """Linux process identity: parent pid, start ticks, state (safe for spaces in comm)."""
+    try:
+        fields = (Path("/proc") / str(pid) / "stat").read_text().rsplit(")", 1)[1].split()
+        return int(fields[1]), int(fields[19]), fields[0]
+    except (OSError, ValueError, IndexError):
+        return None
+
+
 def _pid_alive(pid: int) -> bool:
+    info = _process_stat(pid)
+    if info is not None and info[2] == "Z":
+        return False
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -116,6 +129,78 @@ def _pid_alive(pid: int) -> bool:
     except PermissionError:
         return True
     return True
+
+
+def _terminate_process_tree(pid: int, *, expected_start_ticks: int | None = None,
+                            grace_s: float = 10.0) -> int:
+    """Stop the run and its captured descendants, even in separate process groups.
+
+    Linux start times prevent signalling a recycled pid; pidfds pin the identity
+    across the final check/signal race where supported. No broad process-name or
+    process-group matching is used. Other platforms retain parent-only behavior.
+    """
+    if pid == os.getpid():
+        raise ValueError("refusing to terminate the current Horizon CLI process")
+    identities: dict[int, tuple[int, int, str]] = {}
+    proc_root = Path("/proc")
+    if proc_root.is_dir():
+        for entry in proc_root.iterdir():
+            if entry.name.isdigit() and (info := _process_stat(int(entry.name))) is not None:
+                identities[int(entry.name)] = info
+    root = identities.get(pid)
+    if expected_start_ticks is not None and (root is None or root[1] != expected_start_ticks):
+        raise ValueError("run pid no longer matches its recorded process identity")
+    captured = {pid: root[1] if root else None}
+    while True:
+        additions = {child: info[1] for child, info in identities.items()
+                     if child not in captured and info[0] in captured}
+        if not additions:
+            break
+        captured.update(additions)
+    handles: dict[int, int] = {}
+
+    def still_same(child: int) -> bool:
+        current = _process_stat(child)
+        ticks = captured[child]
+        return ((ticks is None or (current is not None and current[1] == ticks))
+                and _pid_alive(child))
+
+    def send(child: int, sig: int) -> None:
+        if not still_same(child):
+            return
+        try:
+            if child in handles:
+                signal.pidfd_send_signal(handles[child], sig)
+            else:
+                os.kill(child, sig)
+        except ProcessLookupError:
+            pass
+
+    try:
+        if hasattr(os, "pidfd_open") and hasattr(signal, "pidfd_send_signal"):
+            for child in captured:
+                if still_same(child):
+                    try:
+                        handles[child] = os.pidfd_open(child)
+                    except ProcessLookupError:
+                        pass
+        for child in captured:
+            send(child, signal.SIGTERM)
+        deadline = time.monotonic() + grace_s
+        while time.monotonic() < deadline and any(still_same(child) for child in captured):
+            time.sleep(0.05)
+        for child in captured:
+            send(child, signal.SIGKILL)
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline and any(still_same(child) for child in captured):
+            time.sleep(0.05)
+        remaining = [child for child in captured if still_same(child)]
+        if remaining:
+            raise RuntimeError(f"captured processes still alive after termination: {remaining}")
+        return len(captured)
+    finally:
+        for handle in handles.values():
+            os.close(handle)
 
 
 def _last_activity(run_dir: Path) -> float:
@@ -147,7 +232,7 @@ def _finalize_orphaned_sessions(run_dir: Path) -> int:
             continue
         if not isinstance(data, dict):
             continue
-        if str(data.get("status") or "") != "running":
+        if str(data.get("status") or "") not in {"running", "finalizing"}:
             continue
         data["status"] = "interrupted"
         if not data.get("ended_at"):
@@ -317,13 +402,14 @@ def ps(
             log.error(f"Run {row['run']} is owned by {row['host']}; kill it there.")
             raise typer.Exit(1)
         if row["alive"]:
-            os.kill(row["pid"], signal.SIGTERM)
-            deadline = time.monotonic() + 10.0
-            while time.monotonic() < deadline and _pid_alive(row["pid"]):
-                time.sleep(0.2)
-            if _pid_alive(row["pid"]):
-                os.kill(row["pid"], signal.SIGKILL)
-            log.success(f"Terminated run {row['run']} (pid {row['pid']}). Resume with `horizon run --resume {row['run']}`.")
+            marker = _load_record(row["marker"])
+            try:
+                count = _terminate_process_tree(row["pid"], expected_start_ticks=marker.get("process_start_ticks"))
+            except (OSError, ValueError, RuntimeError) as exc:
+                log.error(f"Could not safely terminate run {row['run']}: {exc}")
+                raise typer.Exit(1) from exc
+            log.success(f"Terminated run {row['run']} (pid {row['pid']}; {count - 1} captured descendants). "
+                        f"Inspect interrupted boundary evidence before `horizon run --resume {row['run']}`.")
         _finalize_orphaned_sessions(row["marker"].parent)
         row["marker"].unlink(missing_ok=True)
         return

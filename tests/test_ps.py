@@ -5,6 +5,11 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import subprocess
+import sys
+import time
+
+import pytest
 
 from archon_horizon.cli import main
 
@@ -89,3 +94,46 @@ def test_run_registers_and_clears_process_marker(tmp_path: Path) -> None:
 
     assert seen["marker_during_run"] is True
     assert not (ws / ".archon-horizon" / "runs" / "0001" / "process.json").exists()  # cleared on exit
+
+
+@pytest.mark.skipif(not Path("/proc/self/stat").is_file(), reason="Linux descendant identity test")
+def test_kill_captures_child_in_separate_session_and_preserves_unrelated_process(tmp_path: Path) -> None:
+    from archon_horizon.commands.ps import _pid_alive, _process_stat, _terminate_process_tree
+
+    child_file = tmp_path / "child.pid"
+    program = (
+        "import pathlib,subprocess,sys,time; "
+        "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'],start_new_session=True); "
+        "pathlib.Path(sys.argv[1]).write_text(str(child.pid)); time.sleep(60)"
+    )
+    parent = subprocess.Popen([sys.executable, "-c", program, str(child_file)], start_new_session=True)
+    unrelated = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    child_pid = None
+    try:
+        deadline = time.monotonic() + 5
+        while not child_file.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        child_pid = int(child_file.read_text())
+        count = _terminate_process_tree(parent.pid, expected_start_ticks=_process_stat(parent.pid)[1], grace_s=0.2)
+        parent.wait(timeout=2)
+        assert count == 2
+        assert not _pid_alive(child_pid)
+        assert unrelated.poll() is None
+    finally:
+        for process in (parent, unrelated):
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=2)
+        if child_pid is not None and _pid_alive(child_pid):
+            os.kill(child_pid, 9)
+
+
+def test_kill_refuses_reused_root_pid_before_any_signal(monkeypatch) -> None:
+    from archon_horizon.commands import ps
+
+    signals = []
+    monkeypatch.setattr(ps, "_process_stat", lambda pid: (1, 200, "S"))
+    monkeypatch.setattr(ps.os, "kill", lambda pid, sig: signals.append((pid, sig)))
+    with pytest.raises(ValueError, match="recorded process identity"):
+        ps._terminate_process_tree(23456789, expected_start_ticks=100, grace_s=0)
+    assert not signals

@@ -42,6 +42,16 @@ fidelity locks, transcription reviews, or confirmed/resolved dispute records.
 Escalate unresolved mathematical or source disagreements; do not manufacture a
 satisfactory review to advance a task.
 
+Parallel preparation follows the repository's `docs/PARALLEL_WORKFLOW.md`.
+Give writable node workers isolated checkouts and disjoint explicit ownership;
+freeze dependency inputs and authored handoffs before independent review. Freeze
+completed review reports separately before coordinated registration. Preserve
+actual per-node identities, current inputs and all required honesty evidence.
+A worker check, input snapshot or batch command is not an independent verdict,
+human approval or task completion. Do not edit a frozen set concurrently with
+its review/registration. Preserve failed evidence and recovery state; never
+overwrite another worker's edits or bypass scope restoration.
+
 Commit only to the engine ledger through `hgit` (`$HORIZON_GIT`). Never run
 `git add`, `git commit`, or `git switch` against `<root>/.git`. Publishing uses
 `homalg submit`; `homalg` manages the working branch. Keep private PDFs, page images,
@@ -106,8 +116,9 @@ review. A compiled reviewer remains dormant until the Horizon agent chooses it.
 
 Spawn a subagent **by name** through your engine's own native subagent
 mechanism, with a focused directive: the slice/scope (a chapter, a task, a
-project) and the project it applies to. Spawn several in parallel when the work
-divides cleanly, then wait for and reconcile their reports. Give one subagent
+project) and the project it applies to. Spawn all independent ready slices before
+waiting for results; join where an actual consumer needs an output and before
+ending the session. Reconcile their reports. Give one subagent
 one scoped slice so the workspace scales to many projects.
 
 Delegation is part of the normal workflow, not an exceptional recovery path.
@@ -148,7 +159,28 @@ a writer is expected to touch (Lean/blueprint/reference source).
 Writable helpers remain constrained: `node-writer` owns disjoint node files and
 their review files, never `.tex`; `janitor` tidies comments, inbox and temporary
 files without node moves/renames; `debug` cannot change toolchain or Lake files in
-formalization tasks. Parallel node-writers must have disjoint explicit scopes.
+formalization tasks. Parallel node-writers must have disjoint explicit scopes
+and isolated draft source checkouts with fixed dependency inputs. Their temporary
+scratch directories alone do not isolate source, ledger or build state. The
+native lead receives frozen author handoffs, obtains actual independent per-node
+reviews and requests guarded integration. For HomAlg's native workflow it uses
+`homalg workspaces create --native --task TASK`, bound to its actual active parent
+run/session, normally without copying a large cache. Native-only `workspaces
+collect ID --by LEAD` stages uncompiled owned source after scope/baseline/dependency
+checks; current canonical checks/export and normal review/acceptance follow.
+Checked workers may use `promote --native`. External callers retain the idle guard. The runtime creates
+an isolated public source/ledger projection and serializes canonical promotion;
+workers never promote themselves or take over finalization. The outer coordinator
+supplies bounded future inputs and observes runtime receipts. HomAlg draft workers and Horizon's
+optional native session-ledger mode are different mechanisms; do not change
+scheduler or launch permissions to imitate isolation.
+Source-only native writers return durable candidate files without Git writes;
+the native collection command records the real author. They must not use the
+parent's inherited `hgit` wrapper merely because cwd is an isolated checkout.
+Run worker shell commands through the returned `author_commands` prefix:
+`homalg workspaces exec --repo /absolute/canonical WORKER -- COMMAND...`.
+It selects the isolated cwd, removes parent native/Git/ledger/lock routing and
+holds the worker lock; it grants no broader source permissions.
 Reviewers stay read-only. Do not mark a writer `read_only: true` "to be safe" —
 that disables the layout and authoring work they exist to do.
 

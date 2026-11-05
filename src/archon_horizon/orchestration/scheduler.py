@@ -33,7 +33,7 @@ def write_sets_conflict(a: WriteSet, b: WriteSet) -> bool:
 
 
 def _priority_key(task: HorizonTask) -> tuple[int, str]:
-    raw = task.metadata.get("roadmap_priority", task.metadata.get("priority", "normal"))
+    raw = task.priority
     return (_PRIORITY_ORDER.get(str(raw).lower(), _PRIORITY_ORDER["normal"]), task.id)
 
 
@@ -82,6 +82,8 @@ class FreezeAwareScheduler(Scheduler):
         selected: list[HorizonTask] = []
         for task in sorted(candidates, key=_priority_key):
             if task.status is not TaskStatus.QUEUED:
+                continue
+            if task.metadata.get("finalization_hold") or task.metadata.get("dispatch_hold"):
                 continue
             if not self._in_focus(task, focus):
                 continue

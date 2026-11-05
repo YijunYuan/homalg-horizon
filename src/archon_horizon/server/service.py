@@ -166,7 +166,8 @@ def _sum_usage(usages: Any) -> dict[str, Any]:
 # Version 4 normalizes session cache keys to workspace-relative paths (so the
 # same session is never stored twice under abs+rel keys) and drops long-dead
 # "running" entries that survived a crash without meta finalization.
-_SESSION_CACHE_VERSION = 4
+# Version 5 gives outer finalization state precedence over the agent's exit.
+_SESSION_CACHE_VERSION = 5
 
 # Terminal statuses that may be pruned from the on-disk session cache once the
 # underlying session directory is gone (or after a long quiet period).
@@ -1109,7 +1110,14 @@ class WorkspaceService:
             return "failed"
 
         status = "created"
-        if end is not None:
+        boundary = meta.get("boundary") if isinstance(meta.get("boundary"), dict) else {}
+        if meta.get("status") in {"hook-failed", "scope-violation", "integration-conflict"} or boundary.get("state") == "failed":
+            status = "failed"
+        elif meta.get("status") == "interrupted":
+            status = "interrupted"
+        elif meta.get("status") == "finalizing" or boundary.get("state") == "pending":
+            status = "running"
+        elif end is not None:
             status = ("completed" if end.data.get("ok", True)
                       else _fail_status(end.data.get("failure_reason"),
                                         meta.get("timed_out") or end.data.get("timed_out")))
@@ -2555,7 +2563,11 @@ class WorkspaceService:
             return {"ok": True, "id": task_id}
         if action == "status":
             new_status = TaskStatus(kw["status"])
-            self.stores.tasks.put(dataclasses.replace(old, status=new_status, updated_at=datetime.now(timezone.utc)))
+            metadata = dict(old.metadata)
+            if new_status is TaskStatus.QUEUED:
+                metadata["finalization_hold"] = False
+            self.stores.tasks.put(dataclasses.replace(old, status=new_status, metadata=metadata,
+                                                      updated_at=datetime.now(timezone.utc)))
             if old.status != new_status:
                 self._record_history(self.stores.tasks, task_id, actor, "status",
                                      before=old.status.value, after=new_status.value)
@@ -2571,6 +2583,8 @@ class WorkspaceService:
         return {"ok": True, "id": task_id}
 
     def _sync_task_roadmap_refs(self, task: HorizonTask, status: TaskStatus, actor: str) -> None:
+        if task.metadata.get("roadmap_status_sync") is False:
+            return
         target = roadmap_status_for_task_status(status)
         if target is None or not task.roadmap_refs:
             return
